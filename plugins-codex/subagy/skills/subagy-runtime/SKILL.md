@@ -111,6 +111,7 @@ queued → running → done | error | cancelled | interrupted
 ## 反馈轮次语义
 
 - `feedback` 会让 `round += 1`、状态回到 `queued`，并用 `--conversation <id>` 续会话。
+- 作业的 `model` 与 `effort` 记录于 `meta.json`（`model`/`effort` 字段已存在），打回轮次复用同一档位与模型。
 - 新一轮 prompt 包含上一轮 summary 与本次 message，要求 agy 修复后重新满足契约。
 
 ## 铁律

@@ -63,7 +63,7 @@
 
 | 命令 | 关键参数 | 行为 |
 |---|---|---|
-| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`（默认 pwd）；`--model/--effort/--timeout`（覆盖配置）；`--no-worktree`；`--no-schema` | 校验→建 worktree→写 plan/prompt/schema/meta→spawn detached `_supervise`→**立即**打印 `{job_id, worktree, branch, events_log}` 并 exit 0 |
+| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`（默认 pwd）；`--model/--effort/--timeout`（覆盖配置；派发层按任务复杂度自主抉择 effort，默认 medium）；`--no-worktree`；`--no-schema` | 校验→建 worktree→写 plan/prompt/schema/meta→spawn detached `_supervise`→**立即**打印 `{job_id, worktree, branch, events_log}` 并 exit 0 |
 | `status` | `<id>` \| `--all`；`--json`；`--pretty` | state、round、elapsed、tokens（input/output/total）、最近一条 step 摘要（events.ndjson 尾部解析）；含惰性 interrupted 和解。`--pretty` 输出带 elapsed（m:ss）与 tokens（k/M）列 |
 | `result` | `<id>`；`--events`（附原始事件路径） | 打印 result.json 内容（含 `usage`）+ 现场计算 `git diff --stat <base_sha>..HEAD`；作业未完成时 exit 4 并打印当前状态 |
 | `feedback` | `<id>` `<message>`；`--timeout` | 要求 meta.conversation_id 非空且 state 为 done/error；round+=1，spawn `_supervise --round N`，立即返回 |

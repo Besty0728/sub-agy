@@ -77,13 +77,13 @@ EOF
 
 ### 2. 派发
 
-在 Claude Code 中：
+在 Claude Code 中（主 agent 默认 `gemini-3.7-flash` + `medium`，复杂任务会自动升 `high`，简单任务降 `low`）：
 
 ```text
 /subagy:dispatch plan.md
 ```
 
-或直接用 CLI：
+或直接用 CLI（可显式指定 `--effort` / `--model`）：
 
 ```bash
 sub-agy run --plan plan.md --cwd ./my-project

@@ -93,6 +93,7 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 ## 反馈轮次语义
 
 - `feedback` 会让 `round += 1`、状态回到 `queued`，并用 `--conversation <id>` 续会话。
+- 作业的 `model` 与 `effort` 记录于 `meta.json`（`model`/`effort` 字段已存在），打回轮次复用同一档位与模型。
 - 新一轮 prompt 包含上一轮 summary 与本次 message，要求 agy 修复后重新满足契约。
 - 若 `round>=2` 时 `--json-schema` 导致参数错误，sub-agy 会去掉 schema 重试一次，并在 result 中标 `contract_ok=false, contract_note="schema dropped on round>=2"`。
 

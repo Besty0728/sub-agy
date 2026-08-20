@@ -35,6 +35,20 @@ description: |
    - `<timestamp>` 用 `date +%Y%m%d-%H%M%S` 或 ISO-8601 格式。
    - frontmatter 中的 `scope`/`acceptance`/`constraints` 先留空列表占位，方便后续补全。
 
+## 模型与思考强度抉择
+
+派发每个计划前，主 agent 必须按任务复杂度自主抉择 `--effort`（以及必要时的 `--model` / `--timeout`）：
+
+- **默认值**：model = `gemini-3.7-flash`（flash 系列，配额友好），effort = `medium`。不传旗标即为此默认值，无需显式传参。
+- **effort 自主抉择**（每次派发前主动判断，在汇报卡片中注明所选档位与理由）：
+  | 任务特征 | effort |
+  |---|---|
+  | 单文件小改、文案/文档、机械重命名、简单脚本 | `low` |
+  | 常规多文件特性、带测试的修改（默认档） | `medium` |
+  | 跨模块架构调整、复杂调试、需要长链路推理的计划 | `high` |
+- **model 抉择**：默认不更换（`gemini-3.7-flash`）。仅当用户明确要求时更换；可用 slug 可通过 `agy models` 查询（flash 系列优先）。
+- **timeout 抉择**：按任务规模通过 `--timeout` 透传（默认 30m）。
+
 ## 派发单个计划
 
 ```bash
@@ -65,15 +79,15 @@ sub-agy watch <job-id> [job-id...] --cwd "<项目根>" --timeout <按任务规�
 
 `watch` 返回后，立即按输出中的 `state`/`contract_ok`/`tests_passed` 进入**验收流程**（harvest 技能规则）：
 
-- 验收不通过 → 自动 `sub-agy feedback <id> "<具体修复要求>"` 打回（仅 `done`/`error` 状态）。
+- 验收不通过 → 自动 `sub-agy feedback <id> "<具体修复要求>"` 打回（仅 `done`/`error` 状态）。若判断上一轮失败主要由于思考强度不足（需升级 effort），建议以更高 `--effort` 重新 `run` 新作业，因为 `feedback` 会复用原作业的 `meta.json` 档位。
 - 验收通过 → 只给出 `git merge agy/<id>` 建议，**绝不自行合并/提交/cleanup**。
 - 若状态为 `cancelled`/`interrupted`，向用户说明并等待指示。
 
 ## 输出示例
 
-派发后向用户汇报（作业卡片中注明完成后 tokens/用时见 harvest）：
+派发后向用户汇报（作业卡片中注明档位、理由，以及完成后 tokens/用时见 harvest）：
 
-> 已派发作业 `j-20260820-120000-ab12`，分支 `agy/j-20260820-120000-ab12`，正在 watch 阻塞等待完成（完成后 tokens/用时见 harvest 汇总）...
+> 已派发作业 `j-20260820-120000-ab12`（档位: model=gemini-3.7-flash effort=medium，常规多文件修改），分支 `agy/j-20260820-120000-ab12`，正在 watch 阻塞等待完成（完成后 tokens/用时见 harvest 汇总）...
 
 ## 回退方式
 
