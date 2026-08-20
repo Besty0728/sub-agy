@@ -617,6 +617,23 @@ def cmd_doctor(args) -> None:
         Path.home() / ".gemini" / "antigravity-cli",
     ]
     auth_found = any(d.exists() for d in auth_dirs)
+    if not auth_found:
+        issues.append("auth 痕迹缺失")
+
+    # Issue → hint mapping (§19.2)
+    hint_map = {
+        "agy not found on PATH": "安装 Antigravity CLI 官方版，然后裸跑一次 `agy` 完成 OAuth 登录（sub-agy 不能代跑登录）",
+        "agy version": "升级 agy 至 ≥1.1.8",
+        "auth 痕迹缺失": "裸跑一次 `agy` 交互登录",
+        "config 加载失败": "检查 `~/.config/sub-agy/config.toml` 语法",
+    }
+
+    hints: list[str] = []
+    for issue in issues:
+        for key, hint in hint_map.items():
+            if key in issue:
+                hints.append(hint)
+                break
 
     report = {
         "ok": len(issues) == 0,
@@ -626,8 +643,13 @@ def cmd_doctor(args) -> None:
         "auth_dirs": {str(d): d.exists() for d in auth_dirs},
         "auth_found": auth_found,
         "issues": issues,
+        "hints": hints,
     }
     print(_fmt_json(report, args.pretty))
+    if args.pretty and issues:
+        print("\n修复建议：")
+        for hint in hints:
+            print(f"  • {hint}")
     if issues:
         sys.exit(EXIT_CODES["generic_error"])
 

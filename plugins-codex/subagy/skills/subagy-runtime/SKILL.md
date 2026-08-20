@@ -71,7 +71,7 @@ queued → running → done | error | cancelled | interrupted
 - `structured_output`：agy 按 JSON schema 返回的对象；缺失时 `contract_ok=false`。
 - `response_text`：agy 原始文本响应。
 - `summary` 取值顺序：`structured_output.summary` → `response_text` 前 500 字符。
-- `false_error`（§19.2）：当 agy 状态为 ERROR 但实际代码执行和验收正常（例：agy 输出 "not a valid artifact path" 误报）时会在此标 `"artifact_path"`。见到此字段时按 done 验收，不要按 error 打回。
+- `false_error`（§19.1）：当 agy 状态为 ERROR 但实际代码执行和验收正常（例：agy 输出 "not a valid artifact path" 误报）时会在此标 `"artifact_path"`。见到此字段时按 done 验收，不要按 error 打回。
 
 ## 退出码表
 
@@ -134,9 +134,25 @@ queued → running → done | error | cancelled | interrupted
 
 ## 回退方式
 
-如果 `sub-agy` 不在 PATH：
+### sub-agy 命令不可用时
+
+如果 `sub-agy` 不在 PATH，首先尝试 PATH 兜底：
 
 ```bash
 export SUB_AGY_HOME=/path/to/sub-agy
 uv run --project "$SUB_AGY_HOME" sub-agy --help
 ```
+
+如果 sub-agy CLI 完全未安装，征询用户一次：「是否现在安装 sub-agy CLI?」
+
+- **同意**：代跑以下命令进行安装，然后继续原计划
+  ```bash
+  uv tool install git+https://github.com/Besty0728/sub-agy
+  ```
+
+- **拒绝**：告知用户稍后需要手动安装，提供上述命令供参考
+
+### agy 与 OAuth 登录
+
+- **agy 本体安装**：仅提供官方链接与指引，决不代办
+- **OAuth 登录**：用户必须自己运行裸 `agy` 进行交互式登录完成，sub-agy 不处理登录流程

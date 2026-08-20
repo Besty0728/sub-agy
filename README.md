@@ -42,6 +42,8 @@ flowchart LR
 ## Installation
 
 > **The CLI is required — plugins alone do not work.** The Claude Code / Codex / Kimi Code plugins are thin orchestration layers: every plugin command shells out to the `sub-agy` binary and fails with exit 127 if it is missing. If you prefer not to install it globally, the only fallback is cloning the repo and setting `export SUB_AGY_HOME=<repo path>` — the plugins then run it from source via `uv run --project`, which still requires uv.
+>
+> Since v0.1.1, `/subagy:doctor` detects a missing CLI and offers to install it for you (one confirmation, then `uv tool install`). The `agy` binary and its OAuth login always remain manual.
 
 ### CLI (no clone needed)
 

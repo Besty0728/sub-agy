@@ -42,6 +42,8 @@ flowchart LR
 ## 安装
 
 > **CLI 是必装项——只装插件不能用。** Claude Code / Codex / Kimi Code 三端插件都只是薄薄的编排层:每个插件命令最终都要调用 `sub-agy` 二进制,找不到就以 exit 127 报错。若不想全局安装,唯一的替代是 clone 本仓库并 `export SUB_AGY_HOME=<仓库路径>`——插件会经 `uv run --project` 从源码运行它,但这仍需要 uv。
+>
+> v0.1.1 起,`/subagy:doctor` 检测到 CLI 缺失时会引导安装(征询一次,同意后代跑 `uv tool install`)。`agy` 本体与 OAuth 登录永远需要人工完成。
 
 ### CLI(无需 clone)
 

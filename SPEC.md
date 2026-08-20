@@ -640,3 +640,35 @@ plugins-kimi/subagy/
 
 - 版本策略：v1.5 开发期插件 manifest 曾临时 bump，正式发布时全仓归一为 `0.1.0`（首个公开正式版：pyproject、`__init__.py`、三端插件 manifest、marketplace 清单一致）。
 - 交付物新增：`plugins-kimi/subagy/`、仓库根 `.kimi-plugin/plugin.json`、`plugins/subagy/hooks/hooks.json`、`plugins/subagy/scripts/stop-pending-check.sh`。
+
+## 19. v1.5.1 实测修缮与 v1.5.2 引导式安装
+
+### 19.1 pending --under 与项目注册表（v1.5.1，补档）
+
+- `run`/`feedback` 成功后 best-effort 写入全局最近项目注册表（`recent_projects.json`）。
+- `sub-agy pending --under <dir>`：按注册表聚合 `<dir>` 及子孙目录下所有项目的未收割作业；与 `--cwd` 互斥。动机：Stop hook 只知道 session cwd，而作业常经 `--cwd` 派发到子项目。
+- agy 假 ERROR 缓解：prompt 契约禁止在 worktree 内用 artifact 输出；supervisor 识别签名（status ERROR + structured_output 完好 + "not a valid artifact path"）时落 `done` 并标 `result.false_error="artifact_path"`（在非零退出分支之前判定）。
+- runtime 技能移除会被 Claude Code 在技能装载时当场执行的字面内联执行模式。
+
+### 19.2 doctor 引导式安装（release 0.1.1）
+
+参照 openai/codex 插件 setup 的"一次询问 → 代装 → 重跑"模式。
+
+**CLI 侧**（`cmd_doctor`）：JSON 报告新增与 `issues` 平行的 `hints: []`（向后兼容，仅追加字段）：
+
+| issue | hint |
+|---|---|
+| agy not found on PATH | 安装 Antigravity CLI 官方版，然后裸跑一次 `agy` 完成 OAuth 登录（sub-agy 不能代跑登录） |
+| agy version X < 1.1.8 | 升级 agy 至 ≥1.1.8 |
+| auth 痕迹缺失 | 裸跑一次 `agy` 交互登录 |
+| config 加载失败 | 检查 `~/.config/sub-agy/config.toml` 语法 |
+
+`--pretty` 在问题列表后打印「修复建议」段。无 issue 时 `hints` 为空数组。
+
+**插件侧**（三端，铁律：任何安装命令必须先经恰好一次用户确认；白名单仅两条——uv 官方安装脚本与 `uv tool install git+https://github.com/Besty0728/sub-agy`；agy 本体与登录绝不代办）：
+
+- **Claude `doctor.md`**：`ab doctor` exit 127（sub-agy 未装）→ 检 `command -v uv`：有 uv → AskUserQuestion 恰好一次（「安装 sub-agy CLI（推荐）」/「暂不」），同意 → `uv tool install git+…` → 重跑 doctor；无 uv → 问一次是否连 uv 一起装（`curl -LsSf https://astral.sh/uv/install.sh | sh`），同意依次装并重跑，拒绝给手动指引。doctor 报 agy 问题 → 按 `hints` 逐字转述指引。
+- **Kimi `doctor.md`**：同流程；检测方式为 `sub-agy` 命令不存在（exit 127）；以对话询问一次为限。
+- **Codex runtime SKILL 回退方式**：补充"sub-agy 未安装时征询用户一次，同意后代跑 `uv tool install git+…` 再继续；agy 与登录只能人工"。
+
+版本：release `0.1.1`（= spec v1.5.2），全仓归一。

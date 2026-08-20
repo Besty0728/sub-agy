@@ -1,6 +1,6 @@
 {
   "name": "subagy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "把 Google Antigravity CLI (agy) 变成 Codex 的异步作业执行后端：派发计划、后台执行、结构化验收。",
   "author": {
     "name": "betsy"

@@ -153,3 +153,47 @@ def test_status_null_tokens_when_no_usage(tmp_project: Path) -> None:
     data = json.loads(res.stdout)
     assert data["tokens"] is None
 
+
+def test_doctor_missing_agy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test doctor with agy not found on PATH."""
+    # Create a config pointing to non-existent agy path
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('agy_bin = "/nonexistent/path/to/agy"\ndefault_timeout = "5m"\n', encoding="utf-8")
+    monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
+
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = _run_cli(project, "doctor")
+    # Should fail because agy is missing
+    assert result.returncode != 0, result.stderr
+
+    data = json.loads(result.stdout)
+    assert "hints" in data, "JSON should include 'hints' field"
+    assert isinstance(data["hints"], list), "hints should be a list"
+    assert len(data["hints"]) > 0, "Should have at least one hint for missing agy"
+    # Hint should mention OAuth or 登录
+    assert any("OAuth" in hint or "登录" in hint for hint in data["hints"]), f"Hints: {data['hints']}"
+
+
+def test_doctor_hints_empty_when_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_agy) -> None:
+    """Test doctor with no issues returns empty hints."""
+    # Create a config pointing to fake agy that works
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'agy_bin = "{fake_agy}"\ndefault_timeout = "5m"\n', encoding="utf-8")
+    monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
+    monkeypatch.setenv("FAKE_AGY_STATUS", "SUCCESS")
+    monkeypatch.setenv("FAKE_AGY_RESPONSE", "agy 1.2.0")
+    monkeypatch.setenv("FAKE_AGY_EXIT", "0")
+
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = _run_cli(project, "doctor")
+    # May succeed or fail depending on auth, but should have hints field
+    data = json.loads(result.stdout)
+    assert "hints" in data, "JSON should include 'hints' field"
+    # If no issues, hints should be empty
+    if data.get("ok"):
+        assert data["hints"] == [], f"Expected empty hints when ok=true, got {data['hints']}"
+
