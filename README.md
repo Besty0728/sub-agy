@@ -1,40 +1,59 @@
 # sub-agy
 
-把 Antigravity CLI 变成 Claude Code / Codex / Kimi Code 的异步代码执行后端。  
-Plan in Claude Code / Codex / Kimi Code, execute with Antigravity CLI (Gemini) — official CLIs only.
+> Plan in **Claude Code / Codex / Kimi Code** — execute on **Antigravity CLI** (Gemini). Official CLIs only.
 
-## 特性
+**English** | [简体中文](./README-CN.md)
 
-- **异步派发后台执行**：`run` 立即返回 job_id，agy 在 detached supervisor 中继续完成。
-- **git worktree 隔离**：每个作业在独立 worktree 运行，互不污染主分支。
-- **结构化验收契约**：通过 `--json-schema` 要求 agy 返回 summary/files_changed/tests_passed 等字段。
-- **完成主动通知**：一 job 一后台 watcher，谁先完成先审谁；Stop hook 兜底提醒未收割作业（`sub-agy pending`）。
-- **自动打回回路**：验收不通过时 `feedback` 保留 conversation，启动下一轮修复。
-- **额度查询 0-token**：`quota` 免费查询 Antigravity 5h/weekly 双窗口剩余额度。
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Runtime deps: stdlib only](https://img.shields.io/badge/runtime%20deps-stdlib%20only-lightgrey.svg)
 
-## 环境依赖
+`sub-agy` turns the Antigravity CLI (`agy`) into an **asynchronous code-execution backend** for your planning agent. The planner writes a plan and reviews results; the heavy lifting runs in the background on your Gemini quota, inside an isolated git worktree, and comes back as a structured acceptance report.
 
-- **agy CLI ≥1.1.8** 且已交互登录过一次（跑一次 `agy` 完成 OAuth）
-- **Python ≥3.11**
-- **uv**（推荐）或 pipx
-- **git**（worktree 隔离所需；非 git 项目自动降级为直跑）
-- **Claude Code、Codex 桌面端或 Kimi Code CLI**（至少其一）
+## How it works
 
-## 安装
+```mermaid
+flowchart LR
+    P["Plan<br/>Claude Code · Codex · Kimi Code"] -- "sub-agy run" --> S["Detached supervisor<br/>(FIFO slot queue)"]
+    S --> W["agy · Gemini<br/>isolated git worktree"]
+    W -- "--json-schema" --> R["result.json<br/>structured acceptance"]
+    R -- "watcher wakes the agent" --> V{Review}
+    V -- pass --> M["git merge agy/&lt;job-id&gt;<br/>(always human)"]
+    V -- fail --> F["feedback<br/>same conversation, next round"] --> S
+```
 
-### CLI（无需 clone）
+## Features
+
+- **Async dispatch, background execution** — `run` returns a `job_id` immediately; a detached supervisor keeps `agy` going even after the caller exits. Jobs beyond `max_concurrent` queue up FIFO.
+- **git worktree isolation** — every job runs on its own branch (`agy/<job-id>`) in its own worktree; your main branch stays clean.
+- **Structured acceptance contract** — `--json-schema` makes `agy` report `summary` / `files_changed` / `tests_passed` and more.
+- **Proactive completion notification** — one background watcher per job: whichever job finishes first gets reviewed first. A Stop-hook safety net (`sub-agy pending`) catches anything left unharvested.
+- **Automatic feedback loop** — failed acceptance triggers `feedback`, which keeps the conversation and starts the next repair round.
+- **0-token quota check** — `quota` reads the Antigravity 5h/weekly windows for free.
+
+## Requirements
+
+- **agy CLI ≥ 1.1.8**, logged in once interactively (run `agy` once to complete OAuth)
+- **Python ≥ 3.11**
+- **uv** (recommended) or pipx
+- **git** (needed for worktree isolation; non-git projects fall back to in-place execution)
+- **Claude Code, Codex desktop, or Kimi Code CLI** (at least one)
+
+## Installation
+
+### CLI (no clone needed)
 
 ```bash
 uv tool install git+https://github.com/Besty0728/sub-agy
 ```
 
-验证安装：
+Verify:
 
 ```bash
 sub-agy doctor
 ```
 
-### Claude Code 插件
+### Claude Code plugin
 
 ```text
 /plugin marketplace add Besty0728/sub-agy
@@ -42,9 +61,9 @@ sub-agy doctor
 /reload-plugins
 ```
 
-### Codex 桌面端
+### Codex desktop
 
-无需 clone，在 `~/.codex/config.toml` 添加 git 市场直连：
+No clone needed — add a git marketplace to `~/.codex/config.toml`:
 
 ```toml
 [marketplaces.subagy]
@@ -52,14 +71,14 @@ source_type = "git"
 source = "https://github.com/Besty0728/sub-agy"
 ```
 
-重启 Codex，在插件界面安装 `subagy`。
+Restart Codex and install `subagy` from the plugin panel.
 
-离线/开发场景可用本地市场作为备选：
+For offline/development use, a local marketplace works too:
 
 ```toml
 [marketplaces.subagy]
 source_type = "local"
-source = "<clone 路径>"
+source = "<path to clone>"
 ```
 
 ### Kimi Code CLI
@@ -69,87 +88,87 @@ source = "<clone 路径>"
 /reload
 ```
 
-安装后命令带命名空间：`/subagy:dispatch`、`/subagy:harvest` 等。派发后每个作业由一个后台 `subagy-watcher` subagent 盯守，完成即自动回到主 agent 收割。本地开发可 `/plugins install <clone 路径>`（会拷贝到 `$KIMI_CODE_HOME/plugins/managed/`，改源码需重装）。
+Commands are namespaced: `/subagy:dispatch`, `/subagy:harvest`, etc. After dispatch, each job is watched by a background `subagy-watcher` subagent that returns to the main agent the moment the job finishes. For local development use `/plugins install <path to clone>` (the plugin is copied to `$KIMI_CODE_HOME/plugins/managed/`; reinstall after editing sources).
 
-## 快速上手
+## Quick start
 
-### 1. 写计划文件
+### 1. Write a plan file
 
 ```bash
 cat > plan.md <<'EOF'
 ---
 scope: [src/**/*.py]
 acceptance:
-  - pytest tests/ -q 通过
+  - pytest tests/ -q passes
 constraints:
-  - 不新增依赖
+  - no new dependencies
 ---
-给 login 函数加上类型注解并修复由此暴露出的类型错误。
+Add type annotations to the login function and fix the type errors this exposes.
 EOF
 ```
 
-### 2. 派发
+### 2. Dispatch
 
-在 Claude Code 中（主 agent 默认 `gemini-3.7-flash` + `medium`，复杂任务会自动升 `high`，简单任务降 `low`）：
+In Claude Code (the main agent defaults to `gemini-3.7-flash` + `medium` effort, auto-raising to `high` for complex plans and lowering to `low` for trivial ones):
 
 ```text
 /subagy:dispatch plan.md
 ```
 
-或直接用 CLI（可显式指定 `--effort` / `--model`）：
+Or straight from the CLI (with explicit `--effort` / `--model` if you like):
 
 ```bash
 sub-agy run --plan plan.md --cwd ./my-project
 ```
 
-### 3. 自动审查
+### 3. Automatic review
 
-watcher 触发主 agent 后，按 `/subagy:harvest` 流程审查结果：通过、失败或打回。
+When a watcher wakes the main agent, it reviews the result following the `/subagy:harvest` rules: accept, fail, or send it back for another round.
 
-### 4. 合并
+### 4. Merge
 
-验收合格后，手动合并执行分支：
+Once acceptance passes, merge the execution branch yourself:
 
 ```bash
 git merge agy/<job-id>
 ```
 
-### 额度查询
+### Quota check
 
 ```bash
 sub-agy quota --oneline
 ```
 
-示例输出：
+Sample output (currently localized in Chinese):
 
 ```
 Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 99.8%（6天11小时后重置）；Claude/GPT 模型：7d 限额剩余 100.0%
 ```
 
-## CLI 命令
+## CLI reference
 
-| 命令 | 说明 |
+| Command | Description |
 |---|---|
-| `sub-agy run --plan <plan.md>` | 派发计划，返回 job_id |
-| `sub-agy status [--all]` | 查看作业状态 |
-| `sub-agy result <job-id>` | 收割已完成作业的结果 |
-| `sub-agy feedback <job-id> "..."` | 提交反馈，启动下一轮修复 |
-| `sub-agy watch <job-id>` | 原地等待作业进入终态 |
-| `sub-agy cancel <job-id>` | 取消作业 |
-| `sub-agy list` | 列出当前项目下的作业 |
-| `sub-agy pending` | 列出已完成但未收割的作业（Stop hook 兜底数据源） |
-| `sub-agy cleanup <job-id>` | 清理作业目录与分支 |
-| `sub-agy quota [--oneline] [--pretty]` | 查询 Antigravity 额度（0 token） |
-| `sub-agy doctor` | 环境诊断 |
+| `sub-agy run --plan <plan.md>` | Dispatch a plan, returns `job_id` immediately |
+| `sub-agy status [--all]` | Show job status, queue position, tokens, elapsed |
+| `sub-agy result <job-id>` | Harvest the structured result of a finished job |
+| `sub-agy feedback <job-id> "..."` | Send feedback, start the next repair round |
+| `sub-agy watch <job-id>` | Block until the job reaches a terminal state |
+| `sub-agy cancel <job-id>` | Cancel a job |
+| `sub-agy list` | List jobs in the current project |
+| `sub-agy pending [--under <dir>]` | List finished-but-unharvested jobs (data source for the Stop-hook safety net) |
+| `sub-agy cleanup <job-id>` | Remove the job worktree and branch |
+| `sub-agy quota [--oneline] [--pretty]` | Query Antigravity quota (0 tokens) |
+| `sub-agy doctor` | Environment diagnostics |
 
-## 安全与合规
+## Security & compliance
 
-- **纯官方 CLI 进程编排**：sub-agy 不接触任何模型 API，不存储、不中转 API key。
-- **全自动 + worktree 隔离 + 人工合并**：agy 永远以 `--dangerously-skip-permissions` 启动以支持无人值守执行；安全边界由独立 git worktree 隔离、计划约束以及永远由人工触发的 `git merge` 共同承担。
-- **自动打回、人工合并**：`feedback` 自动保留上下文并重新执行；`git merge agy/<job-id>` 永远由用户手动触发。
+- **Official-CLI process orchestration only** — sub-agy never touches model APIs and never stores or proxies API keys.
+- **Fully autonomous + worktree isolation + human merge** — `agy` always starts with `--dangerously-skip-permissions` for unattended execution; the safety boundary is the isolated git worktree, the plan's scope/constraints, and the fact that `git merge` is always triggered by a human.
+- **Automatic feedback, manual merge** — `feedback` re-runs with full context preserved; `git merge agy/<job-id>` is always yours to run.
 
 ## License
 
 [MIT](./LICENSE)
 
-设计文档见 [SPEC.md](./SPEC.md)。
+Design document: [SPEC.md](./SPEC.md).

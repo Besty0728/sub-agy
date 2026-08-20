@@ -1,6 +1,6 @@
 {
   "name": "subagy",
-  "version": "0.2.1",
+  "version": "0.1.0",
   "description": "把 Antigravity CLI (agy) 变成 Kimi Code 的异步代码执行后端：派发计划、后台执行、结构化验收。",
   "author": "betsy",
   "license": "MIT",

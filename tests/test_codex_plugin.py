@@ -48,7 +48,7 @@ def marketplace_manifest():
 
 def test_plugin_manifest_schema(plugin_manifest):
     assert plugin_manifest["name"] == "subagy"
-    assert plugin_manifest["version"] == "0.2.1"
+    assert plugin_manifest["version"] == "0.1.0"
     assert "description" in plugin_manifest and plugin_manifest["description"]
     assert plugin_manifest.get("author", {}).get("name") == "betsy"
     assert plugin_manifest.get("license") == "MIT"

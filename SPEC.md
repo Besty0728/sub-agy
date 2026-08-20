@@ -603,7 +603,7 @@ manifest 要点：
 ```json
 {
   "name": "subagy",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "把 Antigravity CLI (agy) 变成 Kimi Code 的异步代码执行后端：派发计划、后台执行、结构化验收。",
   "skills": "./plugins-kimi/subagy/skills/",
   "agents": "./plugins-kimi/subagy/agents/",
@@ -638,5 +638,5 @@ plugins-kimi/subagy/
 
 ### 18.7 版本与交付
 
-- 三端插件 manifest `version` → `0.2.0`；`pyproject.toml` bump minor。
+- 版本策略：v1.5 开发期插件 manifest 曾临时 bump，正式发布时全仓归一为 `0.1.0`（首个公开正式版：pyproject、`__init__.py`、三端插件 manifest、marketplace 清单一致）。
 - 交付物新增：`plugins-kimi/subagy/`、仓库根 `.kimi-plugin/plugin.json`、`plugins/subagy/hooks/hooks.json`、`plugins/subagy/scripts/stop-pending-check.sh`。
