@@ -104,18 +104,13 @@ git merge agy/<job-id>
 ### 额度查询
 
 ```bash
-sub-agy quota --pretty
+sub-agy quota --oneline
 ```
 
 示例输出：
 
 ```
-[Gemini Models]
-window          remaining% reset_time                  reset_in
-5h                    99.8 2026-08-20T08:02:31Z        32 minutes
-weekly                99.8 2026-08-26T18:35:04Z        6 days, 11 hours
-
-5h 窗口用于平滑全球容量；weekly 与你的订阅档位挂钩
+Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 99.8%（6天11小时后重置）；Claude/GPT 模型：7d 限额剩余 100.0%
 ```
 
 ## CLI 命令
@@ -130,7 +125,7 @@ weekly                99.8 2026-08-26T18:35:04Z        6 days, 11 hours
 | `sub-agy cancel <job-id>` | 取消作业 |
 | `sub-agy list` | 列出当前项目下的作业 |
 | `sub-agy cleanup <job-id>` | 清理作业目录与分支 |
-| `sub-agy quota [--pretty]` | 查询 Antigravity 额度（0 token） |
+| `sub-agy quota [--oneline] [--pretty]` | 查询 Antigravity 额度（0 token） |
 | `sub-agy doctor` | 环境诊断 |
 
 ## 安全与合规

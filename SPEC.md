@@ -71,7 +71,7 @@
 | `list` | `--state` 过滤 | 扫描 jobs/，表格或 JSON |
 | `cleanup` | `<id>`；`--purge`（连 jobs/<id> 日志目录一起删）；`--delete-branch` | `git worktree remove --force` + 可选 `git branch -D agy/<id>`；拒绝清理 running 作业除非 `--force` |
 | `doctor` | — | 检查 agy 在 PATH、`agy --version` ≥1.1.8、git/python 版本、auth 痕迹（`~/.config/antigravity` 或 `~/.gemini/antigravity-cli` 目录存在）、配置可加载；打印 JSON 报告，有问题 exit 1 |
-| `quota` | — | 查询 Antigravity 额度（0 token）；默认 JSON，支持 `--pretty`；agy 未安装 exit 127，失败 exit 1 |
+| `quota` | — | 查询 Antigravity 额度（0 token）；默认 JSON，支持 `--oneline` 一句话与 `--pretty` 表格；agy 未安装 exit 127，失败 exit 1 |
 | `_supervise` | `<id>` `--round N` | 内部隐藏命令（help 中不显示） |
 
 退出码约定：`0` 成功；`1` 通用错误；`3` 作业不存在；`4` 作业未完成；`5` 超并发上限；`6` 需要 git 仓库但不是；`64` CLI 用法错误；`127` agy 未安装。错误信息走 stderr，stdout 尽量仍有 JSON `{"error": ...}`。

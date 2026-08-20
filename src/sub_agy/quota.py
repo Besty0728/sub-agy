@@ -14,6 +14,83 @@ _REFRESH_RE = re.compile(r"refresh in (.+?)\.?$", re.IGNORECASE)
 _WEEKLY_NAMES = {"weekly limit remaining", "weekly"}
 _FIVE_HOUR_NAMES = {"five hour limit remaining", "five hour", "5h"}
 
+_GROUP_NAME_ZH = {
+    "Gemini Models": "Gemini 模型",
+    "Claude and GPT models": "Claude/GPT 模型",
+}
+
+
+def _humanize_reset_zh(reset_in: str | None) -> str | None:
+    """Convert English reset_in string to compact Chinese.
+
+    Examples:
+        '6 days, 9 hours' -> '6天9小时'
+        '4 hours, 28 minutes' -> '4小时28分'
+        '32 minutes' -> '32分钟'
+    """
+    if not reset_in or reset_in.strip() in ("", "-"):
+        return None
+
+    text = reset_in.strip()
+    day_match = re.search(r"(\d+)\s*days?", text, re.IGNORECASE)
+    hour_match = re.search(r"(\d+)\s*hours?", text, re.IGNORECASE)
+    min_match = re.search(r"(\d+)\s*minutes?", text, re.IGNORECASE)
+    sec_match = re.search(r"(\d+)\s*seconds?", text, re.IGNORECASE)
+
+    parts: list[str] = []
+    if day_match:
+        parts.append(f"{day_match.group(1)}天")
+    if hour_match:
+        parts.append(f"{hour_match.group(1)}小时")
+    if min_match:
+        m_val = min_match.group(1)
+        if day_match or hour_match:
+            parts.append(f"{m_val}分")
+        else:
+            parts.append(f"{m_val}分钟")
+    if sec_match:
+        parts.append(f"{sec_match.group(1)}秒")
+
+    if not parts:
+        return None
+    return "".join(parts)
+
+
+def format_oneline(data: dict) -> str:
+    """Format normalized quota data into a compact Chinese sentence."""
+    groups = data.get("groups", [])
+    if not groups:
+        return ""
+
+    group_sentences: list[str] = []
+    for group in groups:
+        raw_name = group.get("name", "Unknown")
+        group_name = _GROUP_NAME_ZH.get(raw_name, raw_name)
+
+        buckets_by_window: dict[str, dict] = {}
+        for bucket in group.get("buckets", []):
+            window = bucket.get("window")
+            if window and window not in buckets_by_window:
+                buckets_by_window[window] = bucket
+
+        clauses: list[str] = []
+        for target_window, label in [("5h", "5h"), ("weekly", "7d")]:
+            bucket = buckets_by_window.get(target_window)
+            if not bucket:
+                continue
+            pct = bucket.get("remaining_pct", 0.0)
+            reset_zh = _humanize_reset_zh(bucket.get("reset_in"))
+            if reset_zh:
+                clauses.append(f"{label} 限额剩余 {pct:.1f}%（{reset_zh}后重置）")
+            else:
+                clauses.append(f"{label} 限额剩余 {pct:.1f}%")
+
+        if clauses:
+            group_sentences.append(f"{group_name}：{'，'.join(clauses)}")
+
+    return "；".join(group_sentences)
+
+
 
 def _window_from_text(name: str) -> str:
     lowered = name.strip().lower()
