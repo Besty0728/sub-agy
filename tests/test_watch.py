@@ -136,6 +136,23 @@ def test_watch_mixed_terminal_exit_code(tmp_project: Path) -> None:
     assert by_id[err_id]["state"] == "error"
 
 
+def test_watch_strict_flag_exit_code(tmp_project: Path) -> None:
+    """`watch --strict` surfaces failure in the exit code; the default stays 0."""
+    err_id = "j-strict-error"
+    err_meta = _make_meta(tmp_project, err_id, "error")
+    err_meta["agy_status"] = "ERROR"
+    write_meta(tmp_project, err_id, err_meta)
+
+    lenient = _run_watch(tmp_project, err_id, "--interval", "0.5", "--timeout", "5s")
+    assert lenient.returncode == 0, lenient.stderr
+
+    strict = _run_watch(
+        tmp_project, err_id, "--strict", "--interval", "0.5", "--timeout", "5s"
+    )
+    assert strict.returncode == 1, strict.stderr
+    assert json.loads(strict.stdout)[0]["state"] == "error"
+
+
 def test_watch_strict_mode_unit(tmp_project: Path) -> None:
     from sub_agy.watch import watch_jobs
 

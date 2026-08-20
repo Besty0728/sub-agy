@@ -63,10 +63,11 @@ def test_run_status_result_cleanup(git_repo: Path, run_bridge) -> None:
     assert not (git_repo / ".subagy" / "jobs" / job_id).exists()
 
 
-def test_run_concurrency_limit(git_repo: Path, run_bridge, tmp_path: Path) -> None:
+def test_run_queues_beyond_concurrency(git_repo: Path, run_bridge) -> None:
+    """Over the slot limit `run` still accepts the job; it waits in the queue."""
     from sub_agy.jobs import write_meta, new_meta
 
-    # Fill the concurrency slot with a live pid so they are not reconciled away.
+    # Fill every slot with a live pid so they are not reconciled away.
     for i in range(3):
         meta = new_meta(
             f"j-running-{i}", git_repo, None, None, "sha", "m", "low", "30m"
@@ -75,17 +76,61 @@ def test_run_concurrency_limit(git_repo: Path, run_bridge, tmp_path: Path) -> No
         meta["pid_supervisor"] = os.getpid()
         write_meta(git_repo, f"j-running-{i}", meta)
 
-    config_path = tmp_path / "config2.toml"
-    config_path.write_text(
-        'agy_bin = "/bin/true"\nmax_concurrent = 3\n',
-        encoding="utf-8",
-    )
-    env = {"SUB_AGY_CONFIG": str(config_path)}
     plan = git_repo / "plan.md"
     plan.write_text("do work\n", encoding="utf-8")
-    result = run_bridge("run", "--plan", str(plan), env=env, check=False)
-    assert result.returncode == 5
-    assert "max concurrent" in result.stdout
+    result = run_bridge("run", "--plan", str(plan), check=False)
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["state"] == "queued"
+    assert data["queue_position"] == 1
+
+    status = json.loads(run_bridge("status", data["job_id"], check=False).stdout)
+    assert status["state"] == "queued"
+    assert status["queue_position"] == 1
+
+    run_bridge("cancel", data["job_id"], check=False)
+
+
+def test_queued_job_starts_when_slot_frees(
+    git_repo: Path, run_bridge, config_env: Path
+) -> None:
+    """With max_concurrent=1 the second job runs only after the first finishes."""
+    config_env.write_text(
+        config_env.read_text(encoding="utf-8") + "max_concurrent = 1\n",
+        encoding="utf-8",
+    )
+
+    first = json.loads(
+        run_bridge("run", "--text", "slow", env={"FAKE_AGY_DELAY": "3"}).stdout
+    )
+    wait_for_state(run_bridge, first["job_id"], "running")
+
+    second = json.loads(run_bridge("run", "--text", "fast").stdout)
+    assert second["state"] == "queued"
+    assert second["queue_position"] == 1
+    wait_for_state(run_bridge, first["job_id"], "done", timeout=20.0)
+    wait_for_state(run_bridge, second["job_id"], "done", timeout=20.0)
+
+
+def test_cancel_queued_job(git_repo: Path, run_bridge, config_env: Path) -> None:
+    """Cancelling a job that never got a slot lands in `cancelled`, not `error`."""
+    config_env.write_text(
+        config_env.read_text(encoding="utf-8") + "max_concurrent = 1\n",
+        encoding="utf-8",
+    )
+
+    first = json.loads(
+        run_bridge("run", "--text", "slow", env={"FAKE_AGY_DELAY": "10"}).stdout
+    )
+    wait_for_state(run_bridge, first["job_id"], "running")
+    second = json.loads(run_bridge("run", "--text", "queued").stdout)
+    assert second["state"] == "queued"
+
+    assert run_bridge("cancel", second["job_id"], check=False).returncode == 0
+    status = wait_for_state(run_bridge, second["job_id"], "cancelled")
+    assert status["state"] == "cancelled"
+
+    run_bridge("cancel", first["job_id"], check=False)
 
 
 def test_run_no_worktree(git_repo: Path, run_bridge) -> None:

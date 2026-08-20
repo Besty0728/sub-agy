@@ -7,7 +7,7 @@ allowed-tools: Bash, Read
 收割与验收 sub-agy 作业。
 
 触发方式：
-- 可由 watcher 完成通知自动触发（`dispatch` 挂的后台 watcher 退出时）。
+- 可由 watcher 完成通知自动触发（`dispatch` 为每个 job 各挂的后台 watcher 退出时）。**此时只收割该 watcher 盯的那一个 job id**，不要顺手把其他还在跑的作业拉进来。
 - 也可由用户手动调用 `/subagy:harvest [job-id ...]`。
 
 流程：
@@ -22,4 +22,4 @@ allowed-tools: Bash, Read
 - 验收不通过（`contract_ok` 为 false，或 `tests_passed` 为 false，或 diff/文件不符合预期）→ **自动**执行 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" feedback <job-id> "<具体、可操作的修复要求>"` 打回。这是设计目的：打回自动化。
 - 验收通过 → **只**给出合并命令建议（例如 `git merge agy/<job-id>` 或 cherry-pick），**绝不自行合并、提交或清理**。合并与 cleanup 永远由用户手动决定。
 
-**注意**：不要对 `running` 或 `queued` 作业执行 feedback。若目标仍在运行，告诉用户稍后再收割。
+**注意**：不要对 `running` 或 `queued` 作业执行 feedback。若目标仍在运行或仍在排队等槽位，告诉用户稍后再收割。

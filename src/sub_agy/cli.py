@@ -13,7 +13,6 @@ from pathlib import Path
 
 from .config import Config, agy_bin_path, load_config, parse_timeout
 from .jobs import (
-    count_active,
     elapsed_seconds,
     generate_job_id,
     job_dir,
@@ -28,6 +27,7 @@ from .jobs import (
     write_meta,
 )
 from .plan import Plan, assemble_prompt, parse_plan, write_plan_files
+from .queue import queue_forecast, queue_lock, queue_position
 from .quota import fetch_quota, format_oneline
 from .schema import EXIT_CODES, RESULT_SCHEMA, extract_tokens, fmt_elapsed, fmt_tokens
 from .supervise import supervise_round
@@ -114,9 +114,6 @@ def cmd_run(args) -> None:
                 )
             use_worktree = False
 
-    if count_active(project) >= config.max_concurrent:
-        _json_error("max concurrent jobs reached", EXIT_CODES["concurrency"])
-
     job_id = generate_job_id()
     jdir = job_dir(project, job_id)
     jdir.mkdir(parents=True, exist_ok=True)
@@ -172,10 +169,16 @@ def cmd_run(args) -> None:
     )
     stderr_fh.close()
 
-    meta = update_meta(project, job_id, pid_supervisor=proc.pid, state="queued")
+    # Record the supervisor pid under the queue lock so we cannot clobber the
+    # state the supervisor may have already written when it claimed a slot.
+    with queue_lock(project):
+        meta = update_meta(project, job_id, pid_supervisor=proc.pid)
+        forecast = queue_forecast(project, job_id, config.max_concurrent)
 
     output = {
         "job_id": job_id,
+        "state": meta.get("state"),
+        "queue_position": forecast,
         "worktree": str(worktree) if worktree else None,
         "branch": branch,
         "events_log": str(jdir / "events.ndjson"),
@@ -208,6 +211,7 @@ def cmd_status(args) -> None:
                 "id": m["id"],
                 "state": m["state"],
                 "round": m.get("round"),
+                "queue_position": queue_position(project, m["id"]),
                 "elapsed": elapsed_seconds(m),
                 "tokens": _read_job_tokens(project, m["id"]),
                 "summary": latest_step_summary(project, m["id"]),
@@ -217,17 +221,19 @@ def cmd_status(args) -> None:
         if args.pretty:
             print(
                 f"{'id':<30} {'state':<12} {'round':>5} "
-                f"{'elapsed':>10} {'tokens':>10} {'summary'}"
+                f"{'queue':>6} {'elapsed':>10} {'tokens':>10} {'summary'}"
             )
             for item in data:
                 elapsed_str = fmt_elapsed(item.get("elapsed"))
                 tokens_val = item.get("tokens")
                 total_tokens = tokens_val.get("total") if isinstance(tokens_val, dict) else None
                 tokens_str = fmt_tokens(total_tokens)
+                position = item.get("queue_position")
+                queue_str = f"#{position}" if position else "-"
                 summary = (item.get("summary") or "")[:60]
                 print(
                     f"{item['id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
-                    f"{elapsed_str:>10} {tokens_str:>10} {summary}"
+                    f"{queue_str:>6} {elapsed_str:>10} {tokens_str:>10} {summary}"
                 )
         else:
             print(_fmt_json(data, False))
@@ -245,6 +251,7 @@ def cmd_status(args) -> None:
         "id": meta["id"],
         "state": meta["state"],
         "round": meta.get("round"),
+        "queue_position": queue_position(project, args.id),
         "elapsed": elapsed_seconds(meta),
         "tokens": _read_job_tokens(project, args.id),
         "agy_status": meta.get("agy_status"),
@@ -300,6 +307,7 @@ def cmd_watch(args) -> None:
         interval=interval,
         timeout=timeout,
         pretty=args.pretty,
+        strict=args.strict,
     )
     sys.exit(code)
 
@@ -339,7 +347,15 @@ def cmd_feedback(args) -> None:
     prompt_path = job_dir(project, args.id) / "prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
 
-    meta = update_meta(project, args.id, state="queued", round=round_number)
+    meta = update_meta(
+        project,
+        args.id,
+        state="queued",
+        round=round_number,
+        queued_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None,
+        pid_supervisor=None,
+    )
 
     stderr_log = _write_supervisor_stderr(project, args.id)
     stderr_fh = stderr_log.open("a", encoding="utf-8")
@@ -360,11 +376,18 @@ def cmd_feedback(args) -> None:
         cwd=str(project),
     )
     stderr_fh.close()
-    meta = update_meta(project, args.id, pid_supervisor=proc.pid)
+    with queue_lock(project):
+        meta = update_meta(project, args.id, pid_supervisor=proc.pid)
+        forecast = queue_forecast(project, args.id, load_config().max_concurrent)
 
     print(
         _fmt_json(
-            {"job_id": args.id, "round": round_number, "state": "queued"},
+            {
+                "job_id": args.id,
+                "round": round_number,
+                "state": meta.get("state"),
+                "queue_position": forecast,
+            },
             args.pretty,
         )
     )
@@ -604,6 +627,11 @@ def build_parser() -> None:
     )
     watch_p.add_argument(
         "--timeout", default="60m", help="max wait time e.g. 90s/30m/1h (default 60m)"
+    )
+    watch_p.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 unless every watched job ended in state done",
     )
     watch_p.add_argument(
         "--json", action="store_true", help="JSON output (default; kept for explicitness)"

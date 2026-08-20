@@ -22,6 +22,7 @@ from .jobs import (
     update_meta,
     write_meta,
 )
+from .queue import QueueTimeout, acquire_slot
 from .worktree import diff_stat
 
 
@@ -228,11 +229,12 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
         schema_path = None
     config = load_config()
     config = Config(
-        default_model=meta["model"],
-        default_effort=meta["effort"],
-        default_timeout=meta["timeout"],
-        max_retries=config.max_retries,
-        agy_bin=config.agy_bin,
+        **{
+            **config.__dict__,
+            "default_model": meta["model"],
+            "default_effort": meta["effort"],
+            "default_timeout": meta["timeout"],
+        }
     )
 
     cancelled = False
@@ -249,10 +251,44 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    meta["state"] = "running"
-    meta["started_at"] = datetime.now(timezone.utc).isoformat()
+    proc: subprocess.Popen | None = None
+
+    # Claim ownership before queueing so `status`/`list` can reconcile a
+    # supervisor that dies while still waiting for a run slot.
     meta["pid_supervisor"] = os.getpid()
     meta["round"] = round_number
+    write_meta(project, job_id, meta)
+
+    try:
+        slot_meta = acquire_slot(
+            project,
+            job_id,
+            max_concurrent=config.max_concurrent,
+            timeout=parse_timeout(config.queue_timeout),
+            should_abort=lambda: cancelled,
+            on_wait=lambda running, ahead: _write_event(
+                project,
+                job_id,
+                {"type": "queued", "running": running, "queued_ahead": ahead},
+            ),
+        )
+    except QueueTimeout as exc:
+        meta = read_meta(project, job_id)
+        meta["state"] = "error"
+        meta["error"] = str(exc)
+        meta["finished_at"] = datetime.now(timezone.utc).isoformat()
+        write_meta(project, job_id, meta)
+        return
+
+    if slot_meta is None:
+        # Cancelled while queued; never started agy.
+        meta = read_meta(project, job_id)
+        meta["state"] = "cancelled"
+        meta["finished_at"] = datetime.now(timezone.utc).isoformat()
+        write_meta(project, job_id, meta)
+        return
+
+    meta = slot_meta
     meta["attempts"] = meta.get("attempts", 0) + 1
     write_meta(project, job_id, meta)
 
@@ -263,7 +299,6 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     wall_clock = timeout_seconds + grace
     start_time = time.time()
 
-    proc: subprocess.Popen | None = None
     final_event: dict | None = None
     exit_code: int | None = None
     drop_schema = False

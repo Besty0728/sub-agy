@@ -18,6 +18,7 @@ class Config:
     default_timeout: str = "30m"
     max_concurrent: int = 3
     max_retries: int = 1
+    queue_timeout: str = "2h"
     agy_bin: str = "agy"
 
     def timeout_seconds(self) -> int:
@@ -71,6 +72,8 @@ def load_config(path: Path | None = None) -> Config:
         kwargs["max_concurrent"] = int(data["max_concurrent"])
     if "max_retries" in data:
         kwargs["max_retries"] = int(data["max_retries"])
+    if "queue_timeout" in data:
+        kwargs["queue_timeout"] = str(data["queue_timeout"])
     if "agy_bin" in data:
         kwargs["agy_bin"] = str(data["agy_bin"])
 

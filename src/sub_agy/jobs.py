@@ -56,10 +56,12 @@ def new_meta(
     effort: str,
     timeout: str,
 ) -> dict:
+    created_at = datetime.now(timezone.utc).isoformat()
     return {
         "id": job_id,
         "state": "queued",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": created_at,
+        "queued_at": created_at,
         "started_at": None,
         "finished_at": None,
         "round": 1,
@@ -112,12 +114,16 @@ def _is_running(pid: int | None) -> bool:
 
 
 def reconcile_state(meta: dict) -> dict:
-    """Lazily reconcile running jobs whose supervisor has died."""
-    if meta.get("state") != "running":
+    """Lazily reconcile queued/running jobs whose supervisor has died."""
+    state = meta.get("state")
+    if state not in ("running", "queued"):
         return meta
     finished_at = meta.get("finished_at")
     supervisor_pid = meta.get("pid_supervisor")
     if finished_at is not None:
+        return meta
+    if state == "queued" and supervisor_pid is None:
+        # run/feedback spawned the supervisor but has not recorded its pid yet.
         return meta
     if supervisor_pid is not None and _is_running(supervisor_pid):
         return meta
@@ -151,6 +157,8 @@ def list_jobs(project: Path, state_filter: str | None = None) -> list[dict]:
 
 
 def count_active(project: Path) -> int:
+    """Jobs occupying or waiting for a run slot. Informational only — `run` queues
+    rather than rejects; the run-slot gate itself lives in `queue.acquire_slot`."""
     return sum(
         1
         for meta in list_jobs(project)

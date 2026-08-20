@@ -10,17 +10,20 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 
 ## 命令全集
 
-- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" watch <job-id ...> [--interval 秒] [--timeout 时长] [--pretty]`
-  - 轮询每个作业直到全部进入终态。
+- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" watch <job-id ...> [--interval 秒] [--timeout 时长] [--strict] [--pretty]`
+  - 轮询每个作业直到全部进入终态。**barrier 语义**：传多个 id 时要等最后一个才退出，所以增量汇报场景请一个 id 一个 watcher。
   - 任一 id 不存在时立即 exit 3。
   - interval 越界（不在 0.5–60 秒之间）exit 64。
   - 全部终态时输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, tokens, diff_stat, result_path, events_path, worktree, branch`。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。
   - 退出码：全部作业进入终态 → 0；job 不存在 → 3；超时 → 124。
+  - `--strict`：把成败也编码进退出码——全部 `done` → 0，任一 `error`/`cancelled`/`interrupted` → 1。不传时沿用旧行为（只要终态就 0）。
+  - `--timeout` 默认 60m，未把排队等待计入，排队靠后的作业要显式加大。
 - `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" run --plan <file.md> --cwd <project> [--model ...] [--effort ...] [--timeout ...] [--no-worktree] [--wait]`
-  - 创建作业，写入 plan/prompt/schema/meta，spawn detached supervisor，默认立即返回 job_id。
-  - 加 `--wait` 时不立即退出，原地等待该作业到终态，输出与 `watch` 相同的 JSON 对象并遵循相同退出码。
+  - 创建作业，写入 plan/prompt/schema/meta，spawn detached supervisor，默认立即返回 `job_id, state, queue_position, worktree, branch, events_log`。
+  - **不会因并发上限失败**：超出 `max_concurrent` 时作业以 `queued` 落盘等槽位，`queue_position` 给出 1 起的 FIFO 位次（`null` = 已拿到槽位直接跑）。
+  - 加 `--wait` 时不立即退出，原地等待该作业到终态，输出与 `watch` 相同的 JSON 对象并遵循相同退出码（含排队等待时间）。
 - `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" status <job-id> | --all [--pretty]`
-  - 查看作业状态、已运行时间、tokens 消耗、最近一步摘要。包含惰性 interrupted 和解。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。
+  - 查看作业状态、队列位次、已运行时间、tokens 消耗、最近一步摘要。包含惰性 interrupted 和解。`--pretty` 表格包含 `queue`/`elapsed`/`tokens` 列。
 - `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" result <job-id> [--events]`
   - 输出 `result.json` + `git diff --stat`。作业未完成时 exit 4。
 - `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" feedback <job-id> "<message>"`
@@ -39,10 +42,23 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 
 ## watcher 与主动通知
 
-`dispatch` 在汇报完作业卡片后，应通过 Bash `run_in_background` 挂起 `watch <所有新 job id> --cwd <project>`。watcher 退出即表示全部作业进入终态，此时主 agent 会收到系统通知并自动进入 `harvest.md` 的审查流程。
+`dispatch` 在汇报完作业卡片后，应**为每个 job 各挂一个** Bash `run_in_background` 的 `watch <单个 job id> --strict --cwd <project>`。某个 watcher 退出即表示**那一个**作业进入终态，主 agent 会收到系统通知并只对该 job id 进入 `harvest.md` 的审查流程。
 
-- 主 agent 提示语统一为：**watcher 已挂，完成时我会自动开始审查**。
+- **一 job 一 shell**：`watch` 是 barrier，多 id 共用一个 watcher 会让最快的作业被最慢的拖住，失去增量汇报的意义。
+- 主 agent 提示语统一为：**每个作业一个独立 watcher，谁先完成我就先审谁**。
+- `--strict` 让退出码直接区分成败（0 = done，1 = error/cancelled/interrupted），通知无需再解析 JSON 就能判断走向。
 - watcher 完成通知只是触发器，实际审查仍必须遵守 harvest 的硬性规则。
+
+## 并发与排队
+
+- `max_concurrent`（默认 3）限制的是 **同时 `running`** 的作业数，不再是"能不能派发"。
+- `run`/`feedback` 一律接受作业并 spawn detached supervisor；supervisor 在拉起 agy 之前先调用 `queue.acquire_slot`，拿不到槽位就以 `queued` 原地等。
+- 槽位记账在 `<project>/.subagy/queue.lock` 上加 flock 串行化，两个 supervisor 不会抢到同一个槽位。
+- 排队顺序按 `meta.queued_at` FIFO（旧 meta 无此字段时回落 `created_at`）。`feedback` 打回会刷新 `queued_at`，即重新排到队尾。
+- 排队中的作业进 `events.ndjson` 一条 `{"type":"queued","running":N,"queued_ahead":M}` 事件。
+- `queue_timeout`（默认 `2h`）是安全阀：等槽位超时 → `state=error`，`error` 写明等待时长。
+- 排队中的作业可以直接 `cancel`，落 `cancelled` 而非 `error`（agy 从未被拉起）。
+- exit code 5（`concurrency`）保留在退出码表里但 `run` 已不再产出。
 
 ## 设计约定
 
@@ -52,12 +68,12 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 
 `queued` → `running` → `done` | `error` | `cancelled` | `interrupted`
 
-- `queued`：已创建，supervisor 尚未把 agy 拉起。
-- `running`：supervisor 正在运行 agy。
+- `queued`：已创建，supervisor 尚未拿到运行槽位（或刚拿到还没拉起 agy）。`status` 会给出 `queue_position`。
+- `running`：supervisor 已占住一个槽位并正在运行 agy。
 - `done`：agy exit 0 且 status SUCCESS，已写 result.json。
-- `error`：agy 非零退出、status ERROR/INVALID，或无结果事件且无 transcript 兜底。
-- `cancelled`：用户主动 cancel。
-- `interrupted`：惰性和解状态。当 `state=running` 但 supervisor pid 已不存在且 `finished_at` 为空时，`status`/`list` 会现场改写为 `interrupted`。
+- `error`：agy 非零退出、status ERROR/INVALID、无结果事件且无 transcript 兜底，或等槽位超过 `queue_timeout`。
+- `cancelled`：用户主动 cancel（含还在排队、agy 尚未拉起时）。
+- `interrupted`：惰性和解状态。当 `state=running`/`queued` 但 supervisor pid 已不存在且 `finished_at` 为空时，`status`/`list` 会现场改写为 `interrupted`。（`queued` 且 pid 尚未记录时不判定，避免误伤刚 spawn 的作业。）
 
 ## result.json 字段解释
 
@@ -102,20 +118,20 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 | 码 | 含义 |
 |---|---|
 | 0 | 成功 |
-| 1 | 通用错误 |
+| 1 | 通用错误；`watch --strict` 下也表示有作业未 done |
 | 3 | 作业不存在 |
 | 4 | 作业未完成（result 时） |
-| 5 | 超过并发上限 |
+| 5 | 超过并发上限（保留；`run` 改为排队后已不产出） |
 | 6 | 需要 git 仓库但未找到 |
 | 64 | CLI 用法错误/参数无效 |
-| 127 | agy 未安装 |
-
 | 124 | watcher/run --wait 超时 |
+| 127 | agy 未安装 |
 
 ## `.subagy/` 目录结构
 
 ```
 <project>/.subagy/
+├── queue.lock             # 运行槽位记账的 flock 文件
 ├── jobs/<job_id>/
 │   ├── meta.json
 │   ├── plan.md
@@ -130,6 +146,6 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 ## 铁律
 
 1. **合并与 cleanup 由用户决定**：收割通过时只给出 `git merge agy/<job_id>` 或 cherry-pick 建议，绝不要自动合并、提交或清理。
-2. **不打回 running 作业**：feedback/cleanup/harvest 动作只针对 `done`/`error` 作业。看到 `running` 请让用户等待或 `cancel`。
+2. **不打回未完成的作业**：feedback/cleanup/harvest 动作只针对 `done`/`error` 作业。看到 `running` 或 `queued` 请让用户等待或 `cancel`。
 3. **不修改用户 agy 配置**：sub-agy 不读取/修改 `~/.gemini/antigravity-cli/settings.json`，只读取自己的 `~/.config/sub-agy/config.toml`。
 4. **零 API key / 零代理**：sub-agy 只做本地进程编排，所有 LLM 调用都走用户本机已安装的 `agy`。

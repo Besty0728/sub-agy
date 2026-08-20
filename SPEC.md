@@ -74,7 +74,7 @@
 | `quota` | — | 查询 Antigravity 额度（0 token）；默认 JSON，支持 `--oneline` 一句话与 `--pretty` 表格；agy 未安装 exit 127，失败 exit 1 |
 | `_supervise` | `<id>` `--round N` | 内部隐藏命令（help 中不显示） |
 
-退出码约定：`0` 成功；`1` 通用错误；`3` 作业不存在；`4` 作业未完成；`5` 超并发上限；`6` 需要 git 仓库但不是；`64` CLI 用法错误；`127` agy 未安装。错误信息走 stderr，stdout 尽量仍有 JSON `{"error": ...}`。
+退出码约定：`0` 成功；`1` 通用错误（`watch --strict` 下亦表示有作业未 done）；`3` 作业不存在；`4` 作业未完成；`5` 超并发上限（保留，`run` 改为排队后不再产出）；`6` 需要 git 仓库但不是；`64` CLI 用法错误；`127` agy 未安装。错误信息走 stderr，stdout 尽量仍有 JSON `{"error": ...}`。
 
 ## 5. run / _supervise 流程
 
@@ -82,11 +82,22 @@
 1. 解析配置 `~/.config/agy-bridge/config.toml`（tomllib；全部可选，缺省见 §8），CLI flag 覆盖。
 2. 解析计划文件 frontmatter（§7）。
 3. worktree：默认启用。`git -C <cwd> rev-parse --git-dir` 失败 → 若用户未显式 `--no-worktree`，警告并降级为直接在 cwd 执行（meta.worktree=null）。启用时：`base_sha=$(git rev-parse HEAD)`；`git worktree add <project>/.agybridge/worktrees/<id> -b agy/<id> <base_sha>`。
-4. 并发闸：统计本项目 jobs 中 state=running/queued 数量，≥ `max_concurrent`（默认 3）→ exit 5。
+4. 不设并发闸：作业一律创建并 spawn supervisor，槽位由 `_supervise` 排队获取（§5.1）。输出 `queue_position`（1 起的 FIFO 位次，`null` = 已拿到槽位）。
 5. 组装 prompt（§7 模板），写文件，spawn：`[sys.executable, "-m", "agy_bridge.cli", "_supervise", id]`，`start_new_session=True`，stdout/stderr 重定向到 stderr.log 追加。立即返回。
 
+### 5.1 运行槽位排队
+
+`max_concurrent` 限制的是**同时 `running`** 的作业数，不是能否派发。
+
+1. `_supervise` 先把自己的 pid 写进 meta（供 `status` 和解），再调用 `queue.acquire_slot`。
+2. `acquire_slot` 在 `<project>/.subagy/queue.lock` 上加 `fcntl.flock(LOCK_EX)`，锁内统计 `state=running` 的作业数；`free = max_concurrent - running`。
+3. 仅当 `free > 0` 且本作业在 queued 队列中的 FIFO 位次 `< free` 时，锁内原地把自己改为 `state=running` 并写 `started_at`，避免两个 supervisor 抢同一槽位。
+4. FIFO 键为 `meta.queued_at`（旧 meta 回落 `created_at`），`feedback` 打回时刷新 `queued_at` 即重排队尾。
+5. 拿不到槽位则 `poll_interval`（默认 1s）后重试，首次等待写一条 `{"type":"queued","running":N,"queued_ahead":M}` 事件。
+6. 等待超过 `queue_timeout`（默认 `2h`）→ `state=error`；等待期间收到 SIGTERM → `state=cancelled`（agy 从未拉起）。
+
 `_supervise`（托管一个 round）：
-1. 更新 meta（state=running, pid_supervisor, round）。
+1. 写入 pid_supervisor 与 round，排队取得槽位后再更新 meta（state=running, started_at, attempts）。
 2. 组装 agy argv（列表形式，无 shell）：
    ```
    [agy_bin, "-p", prompt, "--cwd", worktree_or_cwd,
@@ -178,8 +189,9 @@ round ≥2 模板：`上一轮反馈：<message>\n\n上一轮 summary：<prev su
 default_model = "gemini-3.7-flash"
 default_effort = "medium"
 default_timeout = "30m"     # Go duration
-max_concurrent = 3          # 每项目
+max_concurrent = 3          # 每项目，限制同时 running 的作业数；超出者排队
 max_retries = 1
+queue_timeout = "2h"        # 等运行槽位的上限，超时 state=error
 agy_bin = "agy"
 ```
 
