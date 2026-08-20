@@ -28,7 +28,7 @@ from .jobs import (
     write_meta,
 )
 from .plan import Plan, assemble_prompt, parse_plan, write_plan_files
-from .quota import fetch_quota
+from .quota import fetch_quota, format_oneline
 from .schema import EXIT_CODES, RESULT_SCHEMA, extract_tokens, fmt_elapsed, fmt_tokens
 from .supervise import supervise_round
 from .watch import watch_jobs
@@ -533,6 +533,10 @@ def cmd_quota(args) -> None:
         print(_fmt_json({"ok": False, "error": str(exc)}, False), file=sys.stdout)
         sys.exit(EXIT_CODES["generic_error"])
 
+    if getattr(args, "oneline", False):
+        print(format_oneline(data))
+        return
+
     if args.pretty:
         for group in data.get("groups", []):
             print(f"[{group['name']}]")
@@ -634,6 +638,7 @@ def build_parser() -> None:
     doctor_p.set_defaults(func=cmd_doctor)
 
     quota_p = sub.add_parser("quota", help="query Antigravity usage quotas")
+    quota_p.add_argument("--oneline", action="store_true", help="compact one-line summary")
     quota_p.set_defaults(func=cmd_quota)
 
     sup_p = sub.add_parser("_supervise", help=argparse.SUPPRESS)

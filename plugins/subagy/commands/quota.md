@@ -9,24 +9,15 @@ allowed-tools: Bash
 请使用 Bash 工具执行以下命令：
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" quota --pretty
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" quota --oneline
 ```
 
-将命令输出**逐字**贴进回复，不要总结、改写或省略表格本体。输出后可附加一行必要的中文注释（例如 `5h` 窗口用于平滑全球容量，`weekly` 与你的订阅档位挂钩）。
+将命令输出**逐字**贴进回复，不要总结或改写。需要明细表格时用 `quota --pretty`。
 
 ## 输出示例
 
 ```
-[Gemini Models]
-window          remaining% reset_time                  reset_in
-5h                    99.8 2026-08-20T08:02:31Z        32 minutes
-weekly                99.8 2026-08-26T18:35:04Z        6 days, 11 hours
-
-[Claude and GPT models]
-window          remaining% reset_time                  reset_in
-weekly               100.0 2026-08-27T00:00:00Z        -
-
-5h 窗口用于平滑全球容量；weekly 与你的订阅档位挂钩
+Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 99.8%（6天11小时后重置）；Claude/GPT 模型：7d 限额剩余 100.0%
 ```
 
 ## 说明

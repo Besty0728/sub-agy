@@ -190,3 +190,109 @@ def test_quota_pretty(structured_agy: Path, tmp_path: Path) -> None:
     assert "5h" in result.stdout
     assert "weekly" in result.stdout
     assert "5h 窗口用于平滑全球容量" in result.stdout
+
+
+def test_humanize_reset_zh() -> None:
+    from sub_agy.quota import _humanize_reset_zh
+
+    assert _humanize_reset_zh("6 days, 9 hours") == "6天9小时"
+    assert _humanize_reset_zh("4 hours, 28 minutes") == "4小时28分"
+    assert _humanize_reset_zh("32 minutes") == "32分钟"
+    assert _humanize_reset_zh("1 day, 1 hour") == "1天1小时"
+    assert _humanize_reset_zh("1 hour") == "1小时"
+    assert _humanize_reset_zh("1 day") == "1天"
+    assert _humanize_reset_zh("1 minute") == "1分钟"
+    assert _humanize_reset_zh("30 seconds") == "30秒"
+    assert _humanize_reset_zh(None) is None
+    assert _humanize_reset_zh("-") is None
+    assert _humanize_reset_zh("") is None
+    assert _humanize_reset_zh("   ") is None
+    assert _humanize_reset_zh("unknown format") is None
+
+
+def test_format_oneline() -> None:
+    from sub_agy.quota import format_oneline
+
+    data = {
+        "groups": [
+            {
+                "name": "Gemini Models",
+                "buckets": [
+                    {
+                        "window": "5h",
+                        "remaining_pct": 89.4,
+                        "reset_in": "4 hours, 28 minutes",
+                    },
+                    {
+                        "window": "weekly",
+                        "remaining_pct": 98.1,
+                        "reset_in": "6 days, 9 hours",
+                    },
+                ],
+            },
+            {
+                "name": "Claude and GPT models",
+                "buckets": [
+                    {
+                        "window": "5h",
+                        "remaining_pct": 100.0,
+                        "reset_in": None,
+                    },
+                    {
+                        "window": "weekly",
+                        "remaining_pct": 100.0,
+                        "reset_in": "-",
+                    },
+                ],
+            },
+        ]
+    }
+    expected = (
+        "Gemini 模型：5h 限额剩余 89.4%（4小时28分后重置），7d 限额剩余 98.1%（6天9小时后重置）；"
+        "Claude/GPT 模型：5h 限额剩余 100.0%，7d 限额剩余 100.0%"
+    )
+    assert format_oneline(data) == expected
+
+
+def test_format_oneline_edge_cases() -> None:
+    from sub_agy.quota import format_oneline
+
+    # Empty groups
+    assert format_oneline({"groups": []}) == ""
+    assert format_oneline({}) == ""
+
+    # Single bucket, custom group name
+    data = {
+        "groups": [
+            {
+                "name": "Custom Model Group",
+                "buckets": [
+                    {
+                        "window": "weekly",
+                        "remaining_pct": 75.0,
+                        "reset_in": "2 days",
+                    }
+                ],
+            }
+        ]
+    }
+    assert format_oneline(data) == "Custom Model Group：7d 限额剩余 75.0%（2天后重置）"
+
+
+def test_quota_oneline(structured_agy: Path, tmp_path: Path) -> None:
+    result = _run_quota(tmp_path, "--oneline", agy_bin=structured_agy)
+    assert result.returncode == 0, result.stderr
+    expected = (
+        "Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 99.8%（6天11小时后重置）；"
+        "Claude/GPT 模型：7d 限额剩余 100.0%"
+    )
+    assert result.stdout.strip() == expected
+
+
+def test_quota_oneline_priority(structured_agy: Path, tmp_path: Path) -> None:
+    # When both --oneline and --pretty are passed, --oneline takes priority
+    result = _run_quota(tmp_path, "--oneline", "--pretty", agy_bin=structured_agy)
+    assert result.returncode == 0, result.stderr
+    assert "Gemini 模型：" in result.stdout
+    assert "window" not in result.stdout
+
