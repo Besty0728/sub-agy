@@ -275,3 +275,85 @@ def latest_step_summary(project: Path, job_id: str) -> str | None:
                 summary = text[:200]
                 break
     return summary
+
+
+def _get_recent_projects_path() -> Path:
+    """Get registry file path: <config dir>/recent_projects.json.
+
+    Config dir = SUB_AGY_CONFIG's parent (if SUB_AGY_CONFIG points to config.toml),
+    else defaults to ~/.config/sub-agy/
+    """
+    env_config = os.environ.get("SUB_AGY_CONFIG")
+    if env_config:
+        return Path(env_config).parent / "recent_projects.json"
+    return Path.home() / ".config" / "sub-agy" / "recent_projects.json"
+
+
+def register_project(project: Path) -> None:
+    """§19.1: Register project in recent_projects.json.
+
+    - Resolves path to absolute, deduplicates by path
+    - Keeps most recent last_dispatch, drops older entries for same path
+    - Sorts descending by last_dispatch
+    - Truncates to 50 entries
+    - Atomic write (tmp + os.replace)
+    - Silently ignores all errors (never affects dispatch)
+    """
+    try:
+        project = project.resolve()
+        registry_path = _get_recent_projects_path()
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing registry
+        projects: list[dict] = []
+        if registry_path.exists():
+            try:
+                projects = json.loads(registry_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                projects = []
+
+        # Deduplicate by path, keeping most recent last_dispatch
+        path_to_entry: dict[str, dict] = {}
+        for entry in projects:
+            path = entry.get("path")
+            if path:
+                existing = path_to_entry.get(path)
+                if not existing or entry.get("last_dispatch", "") > existing.get("last_dispatch", ""):
+                    path_to_entry[path] = entry
+
+        # Insert/update current project
+        now_iso = datetime.now(timezone.utc).isoformat()
+        path_to_entry[str(project)] = {
+            "path": str(project),
+            "last_dispatch": now_iso,
+        }
+
+        # Sort by last_dispatch descending, truncate to 50
+        projects = sorted(
+            path_to_entry.values(),
+            key=lambda e: e.get("last_dispatch", ""),
+            reverse=True,
+        )[:50]
+
+        # Atomic write
+        tmp_path = registry_path.parent / f"{registry_path.name}.tmp"
+        tmp_path.write_text(json.dumps(projects, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp_path, registry_path)
+    except Exception:
+        # Silently ignore all errors — never affect dispatch
+        pass
+
+
+def load_recent_projects() -> list[dict]:
+    """§19.1: Load recent projects from registry.
+
+    Returns list of {"path": "...", "last_dispatch": "..."} dicts,
+    or empty list if registry doesn't exist or can't be read.
+    """
+    try:
+        registry_path = _get_recent_projects_path()
+        if not registry_path.exists():
+            return []
+        return json.loads(registry_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return []

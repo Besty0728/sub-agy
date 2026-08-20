@@ -65,7 +65,7 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 
 ## 设计约定
 
-- **面向用户的展示型输出必须经 Bash 工具调用呈现**（工具调用对用户可见）。不要用内联执行（`` !`bash ...` ``）把结果藏进提示词。例如 `quota`、`status`、`doctor` 等展示型命令，应调用 Bash 工具执行 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" <子命令> --pretty`，再把输出逐字贴进回复。
+- **面向用户的展示型输出必须经 Bash 工具调用呈现**（工具调用对用户可见）。不要用内联执行语法（感叹号紧跟反引号命令的写法——本文档不能出现其字面形态，否则技能加载时会被真的执行）把结果藏进提示词。例如 `quota`、`status`、`doctor` 等展示型命令，应调用 Bash 工具执行 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" <子命令> --pretty`，再把输出逐字贴进回复。
 
 ## 作业状态机
 
@@ -108,6 +108,7 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
 - `recovered_from_transcript`：agy stdout bug 触发，从 transcript 兜底恢复时为 true。
 - `structured_output`：agy 按 JSON schema 返回的对象；缺失时 `contract_ok=false`。
 - `response_text`：agy 原始文本响应。
+- `false_error`（§19.2）：当 agy 状态为 ERROR 但实际代码执行和验收正常（例：agy 输出 "not a valid artifact path" 误报）时会在此标 `"artifact_path"`。见到此字段时按 done 验收，不要按 error 打回。
 
 ## 反馈轮次语义
 

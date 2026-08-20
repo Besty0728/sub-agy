@@ -434,10 +434,22 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
                 final_event = {"type": "result", "response": response_text}
 
     # Determine final state
+    # §19.2: Detect and mitigate false ERROR (artifact path misleading)
+    is_false_error = False
+    if (agy_status == "ERROR" and structured_output and final_event):
+        final_event_json = json.dumps(final_event, ensure_ascii=False)
+        if "not a valid artifact path" in final_event_json:
+            is_false_error = True
+
     if final_event is None and not cancelled:
         # No result event and no transcript fallback
         meta["state"] = "error"
         meta["error"] = "no result event from agy and no transcript fallback"
+    elif is_false_error and not cancelled:
+        # §19.2: Treat false artifact-path ERROR as done — must win over the
+        # nonzero-exit branch too, since agy may exit nonzero on this misreport
+        meta["state"] = "done"
+        meta["error"] = None
     elif exit_code != 0 and not cancelled:
         meta["state"] = "error"
         if meta.get("error") is None:
@@ -499,6 +511,8 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     }
     if contract_note:
         result["contract_note"] = contract_note
+    if is_false_error:  # §19.2: Mark false artifact-path ERROR
+        result["false_error"] = "artifact_path"
 
     # Write result.json before updating meta to terminal state (§18.1.c)
     if meta["state"] in ("done", "error"):

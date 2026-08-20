@@ -20,10 +20,12 @@ from .jobs import (
     job_dir,
     latest_step_summary,
     list_jobs,
+    load_recent_projects,
     meta_path,
     new_meta,
     read_meta,
     reconcile_state,
+    register_project,
     result_path,
     update_meta,
     write_meta,
@@ -198,6 +200,9 @@ def cmd_run(args) -> None:
     with queue_lock(project):
         meta = update_meta(project, job_id, pid_supervisor=proc.pid)
         forecast = queue_forecast(project, job_id, config.max_concurrent)
+
+    # §19.1: Register project in recent_projects registry (best-effort)
+    register_project(project)
 
     output = {
         "job_id": job_id,
@@ -433,6 +438,9 @@ def cmd_feedback(args) -> None:
         meta = update_meta(project, args.id, pid_supervisor=proc.pid)
         forecast = queue_forecast(project, args.id, load_config().max_concurrent)
 
+    # §19.1: Register project in recent_projects registry (best-effort)
+    register_project(project)
+
     print(
         _fmt_json(
             {
@@ -664,52 +672,165 @@ def cmd_supervise(args) -> None:
 
 
 def cmd_pending(args) -> None:
-    """§18.2: List jobs pending harvest (done/error/interrupted with harvested_at=null)."""
-    project = _resolve_project(args)
-    jobs = list_jobs(project)
+    """§18.2/§19.1: List jobs pending harvest (done/error/interrupted with harvested_at=null).
 
-    pending = []
-    for meta in jobs:
-        # Reconcile state (lazy interrupted detection)
-        original_state = meta.get("state")
-        meta = reconcile_state(meta)
-        if meta.get("state") != original_state:
-            write_meta(project, meta["id"], meta)
+    --under <dir>: aggregate pending jobs under <dir> and descendants (§19.1).
+    --under and --cwd are mutually exclusive.
+    """
+    # §19.1: Check --under and --cwd mutual exclusivity
+    # Only error if both are explicitly passed on command line
+    if args.under:
+        # Check if --cwd was explicitly passed (not just default)
+        import sys as sys_module
+        argv = sys_module.argv
+        # Simple heuristic: if --cwd appears in argv and --under appears, they're both explicit
+        has_explicit_cwd = "--cwd" in argv
+        has_explicit_under = "--under" in argv
+        if has_explicit_cwd and has_explicit_under:
+            _json_error("--under and --cwd are mutually exclusive", EXIT_CODES["usage"])
 
-        # Check: terminal state, has harvested_at key, and it's null
-        if meta.get("state") in ("done", "error", "interrupted"):
-            # "has key" means it was explicitly set (new jobs have harvested_at: null)
-            # Old jobs without the key are considered already harvested
-            if "harvested_at" in meta and meta.get("harvested_at") is None:
-                # Fetch summary from result if available
-                rpath = result_path(project, meta["id"])
-                summary = ""
-                if rpath.exists():
-                    try:
-                        result = json.loads(rpath.read_text(encoding="utf-8"))
-                        summary = (result.get("summary") or "")[:120]
-                    except (json.JSONDecodeError, OSError):
-                        pass
+    if args.under:
+        # §19.1: --under mode: aggregate projects
+        under_dir = Path(args.under).resolve()
+        projects_to_scan: list[Path] = []
 
-                pending.append({
-                    "job_id": meta.get("id"),
-                    "state": meta.get("state"),
-                    "round": meta.get("round"),
-                    "finished_at": meta.get("finished_at"),
-                    "summary": summary,
-                })
+        # Add <dir> itself if it has .subagy/jobs
+        if (under_dir / ".subagy" / "jobs").exists():
+            projects_to_scan.append(under_dir)
+
+        # Load registry and filter for descendants of <dir>
+        registry = load_recent_projects()
+        valid_entries: list[dict] = []
+        for entry in registry:
+            path_str = entry.get("path")
+            if not path_str:
+                continue
+            path = Path(path_str)
+            # Check if path still exists and is a descendant of under_dir
+            try:
+                path = path.resolve()
+                if path.is_relative_to(under_dir) and path != under_dir:
+                    if (path / ".subagy" / "jobs").exists():
+                        projects_to_scan.append(path)
+                        valid_entries.append(entry)
+                else:
+                    # Not a descendant or is <dir> itself
+                    valid_entries.append(entry)
+            except (ValueError, OSError):
+                # Path doesn't exist or resolve failed; skip but keep in registry
+                valid_entries.append(entry)
+
+        # Write back cleaned registry (entries with missing dirs removed)
+        # This is best-effort; if it fails, we continue anyway
+        try:
+            from .jobs import _get_recent_projects_path
+            registry_path = _get_recent_projects_path()
+            if registry_path.exists() and len(valid_entries) < len(registry):
+                tmp_path = registry_path.parent / f"{registry_path.name}.tmp"
+                tmp_path.write_text(json.dumps(valid_entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                os.replace(tmp_path, registry_path)
+        except Exception:
+            pass  # Silently ignore registry write failures
+
+        # Collect pending jobs from all projects
+        pending = []
+        for project in projects_to_scan:
+            try:
+                jobs = list_jobs(project)
+                for meta in jobs:
+                    # Reconcile state
+                    original_state = meta.get("state")
+                    meta = reconcile_state(meta)
+                    if meta.get("state") != original_state:
+                        write_meta(project, meta["id"], meta)
+
+                    # Check: terminal state, has harvested_at key, and it's null
+                    if meta.get("state") in ("done", "error", "interrupted"):
+                        if "harvested_at" in meta and meta.get("harvested_at") is None:
+                            # Fetch summary from result
+                            rpath = result_path(project, meta["id"])
+                            summary = ""
+                            if rpath.exists():
+                                try:
+                                    result = json.loads(rpath.read_text(encoding="utf-8"))
+                                    summary = (result.get("summary") or "")[:120]
+                                except (json.JSONDecodeError, OSError):
+                                    pass
+
+                            pending.append({
+                                "job_id": meta.get("id"),
+                                "state": meta.get("state"),
+                                "round": meta.get("round"),
+                                "finished_at": meta.get("finished_at"),
+                                "summary": summary,
+                                "project": str(project),  # §19.1: Include project path
+                            })
+            except (OSError, ValueError):
+                # Skip projects that can't be accessed
+                pass
+
+    else:
+        # §18.2: Regular pending mode (single project)
+        project = _resolve_project(args)
+        jobs = list_jobs(project)
+
+        pending = []
+        for meta in jobs:
+            # Reconcile state (lazy interrupted detection)
+            original_state = meta.get("state")
+            meta = reconcile_state(meta)
+            if meta.get("state") != original_state:
+                write_meta(project, meta["id"], meta)
+
+            # Check: terminal state, has harvested_at key, and it's null
+            if meta.get("state") in ("done", "error", "interrupted"):
+                # "has key" means it was explicitly set (new jobs have harvested_at: null)
+                # Old jobs without the key are considered already harvested
+                if "harvested_at" in meta and meta.get("harvested_at") is None:
+                    # Fetch summary from result if available
+                    rpath = result_path(project, meta["id"])
+                    summary = ""
+                    if rpath.exists():
+                        try:
+                            result = json.loads(rpath.read_text(encoding="utf-8"))
+                            summary = (result.get("summary") or "")[:120]
+                        except (json.JSONDecodeError, OSError):
+                            pass
+
+                    pending.append({
+                        "job_id": meta.get("id"),
+                        "state": meta.get("state"),
+                        "round": meta.get("round"),
+                        "finished_at": meta.get("finished_at"),
+                        "summary": summary,
+                    })
 
     if args.pretty:
-        print(
-            f"{'job_id':<30} {'state':<12} {'round':>5} {'finished_at':<26} {'summary'}"
-        )
-        for item in pending:
-            finished = item.get("finished_at") or "-"
-            summary = item.get("summary", "")[:60]
+        # Pretty print with project column if present
+        has_project = any(item.get("project") for item in pending)
+        if has_project:
             print(
-                f"{item['job_id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
-                f"{finished:<26} {summary}"
+                f"{'job_id':<30} {'state':<12} {'round':>5} {'finished_at':<26} {'project':<50} {'summary'}"
             )
+            for item in pending:
+                finished = item.get("finished_at") or "-"
+                summary = item.get("summary", "")[:40]
+                project_str = item.get("project") or "-"
+                print(
+                    f"{item['job_id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
+                    f"{finished:<26} {project_str:<50} {summary}"
+                )
+        else:
+            print(
+                f"{'job_id':<30} {'state':<12} {'round':>5} {'finished_at':<26} {'summary'}"
+            )
+            for item in pending:
+                finished = item.get("finished_at") or "-"
+                summary = item.get("summary", "")[:60]
+                print(
+                    f"{item['job_id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
+                    f"{finished:<26} {summary}"
+                )
     else:
         print(json.dumps(pending, indent=2, ensure_ascii=False))
 
@@ -807,6 +928,7 @@ def build_parser() -> None:
     sup_p.set_defaults(func=cmd_supervise)
 
     pending_p = sub.add_parser("pending", help="list jobs pending harvest (§18.2)")
+    pending_p.add_argument("--under", help="aggregate pending jobs under <dir> and descendants (§19.1)")
     pending_p.set_defaults(func=cmd_pending)
 
     return parser

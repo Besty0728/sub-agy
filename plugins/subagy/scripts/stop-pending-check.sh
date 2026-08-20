@@ -19,14 +19,15 @@ if [ -z "$cwd" ]; then
   cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
 fi
 
-# 检查 <cwd>/.subagy/jobs 目录是否存在
-if [ ! -d "$cwd/.subagy/jobs" ]; then
+# §19.1: 快速前置判断改为「$cwd/.subagy/jobs 不存在 且 注册表文件不存在 → exit 0」
+registry_file="${HOME}/.config/sub-agy/recent_projects.json"
+if [ ! -d "$cwd/.subagy/jobs" ] && [ ! -f "$registry_file" ]; then
   exit 0
 fi
 
-# 调用 ab pending 子命令获取未收割的作业列表
+# 调用 sub-agy pending --under 获取未收割的作业列表
 # 任何错误或非 JSON 输出都 fail-open（exit 0）
-pending_json=$(bash "$(dirname "$0")/ab" pending --cwd "$cwd" 2>/dev/null || echo "[]")
+pending_json=$(bash "$(dirname "$0")/ab" pending --under "$cwd" 2>/dev/null || echo "[]")
 
 # 校验 JSON 格式，如果不是有效 JSON，fail-open
 if ! echo "$pending_json" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
@@ -39,13 +40,21 @@ if [ "$pending_json" = "[]" ]; then
 fi
 
 # 非空，提取 job_id 列表并构建阻断消息
-job_ids=$(echo "$pending_json" | python3 -c "
+# §19.1: 若元素含 project 字段，按 "job_id(project)" 形式列出
+job_list=$(echo "$pending_json" | python3 -c "
 import sys, json
 try:
   data = json.load(sys.stdin)
   if isinstance(data, list) and len(data) > 0:
-    ids = [item.get('job_id', '') for item in data if 'job_id' in item]
-    print(', '.join(ids))
+    items = []
+    for item in data:
+      job_id = item.get('job_id', '')
+      project = item.get('project')
+      if project:
+        items.append(f'{job_id}({project})')
+      else:
+        items.append(job_id)
+    print(', '.join(items))
   else:
     print('')
 except:
@@ -53,8 +62,8 @@ except:
 " 2>/dev/null || echo "")
 
 # 如果成功提取了 job_id，向 stdout 输出阻断信息
-if [ -n "$job_ids" ]; then
-  echo "{\"decision\":\"block\",\"reason\":\"sub-agy 作业 $job_ids 已完成未收割，请按 /subagy:harvest 流程收割\"}"
+if [ -n "$job_list" ]; then
+  echo "{\"decision\":\"block\",\"reason\":\"sub-agy 作业 $job_list 已完成未收割，请按 /subagy:harvest 流程收割\"}"
 fi
 
 exit 0

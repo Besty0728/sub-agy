@@ -95,6 +95,7 @@ queued → running → done | error | cancelled | interrupted
 - `structured_output`：agy 按 JSON schema 返回的对象；缺失时 `contract_ok=false`。
 - `response_text`：agy 原始文本响应。
 - `summary` 取值顺序：`structured_output.summary` → `response_text` 前 500 字符。
+- `false_error`（§19.2）：当 agy 状态为 ERROR 但实际代码执行和验收正常（例：agy 输出 "not a valid artifact path" 误报）时会在此标 `"artifact_path"`。见到此字段时按 done 验收，不要按 error 打回。
 
 ## 并发与排队语义
 

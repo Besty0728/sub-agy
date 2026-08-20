@@ -132,6 +132,7 @@ def assemble_prompt(
 {constraints}
 - 结束前用 conventional commit 把你的改动提交到当前分支。
 - 最终回答必须满足附带的 JSON schema（structured_output）：summary、files_changed、tests_ran、tests_passed、acceptance_met、blockers、followups。
+- 产物一律直接写普通文件并 git 提交；严禁把 worktree 内文件作为 artifact 输出（不要用 artifact/write_to_file 类工具写 worktree 绝对路径，artifact 仅允许在 brain 目录），否则会触发收尾误报。
 """
     return prompt
 

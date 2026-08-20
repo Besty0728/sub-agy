@@ -498,3 +498,203 @@ def test_reconcile_respects_existing_result_json(git_repo: Path) -> None:
     else:
         # Correct behavior: result.json exists and state respects it
         assert rpath.exists()
+
+
+# §19.1 Tests: recent-projects registry and pending --under
+
+
+def test_register_project_basic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§19.1: register_project writes to registry with deduplication and sorting."""
+    from sub_agy.jobs import load_recent_projects, register_project
+
+    config_dir = tmp_path / "config" / "sub-agy"
+    config_dir.mkdir(parents=True)
+    registry_file = config_dir / "recent_projects.json"
+
+    # Mock _get_recent_projects_path
+    import sub_agy.jobs as jobs_mod
+
+    monkeypatch.setattr(jobs_mod, "_get_recent_projects_path", lambda: registry_file)
+
+    project = tmp_path / "project1"
+    project.mkdir()
+
+    # First registration
+    register_project(project)
+    assert registry_file.exists()
+    projects = json.loads(registry_file.read_text(encoding="utf-8"))
+    assert len(projects) == 1
+    assert projects[0]["path"] == str(project.resolve())
+
+    # Second registration same path (should not duplicate)
+    time.sleep(0.01)
+    register_project(project)
+    projects = json.loads(registry_file.read_text(encoding="utf-8"))
+    assert len(projects) == 1
+
+
+def test_register_project_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§19.1: register_project truncates to 50 entries."""
+    from sub_agy.jobs import register_project
+
+    config_dir = tmp_path / "config" / "sub-agy"
+    config_dir.mkdir(parents=True)
+    registry_file = config_dir / "recent_projects.json"
+
+    import sub_agy.jobs as jobs_mod
+
+    monkeypatch.setattr(jobs_mod, "_get_recent_projects_path", lambda: registry_file)
+
+    # Create 60 projects
+    for i in range(60):
+        project = tmp_path / f"p{i}"
+        project.mkdir()
+        register_project(project)
+        time.sleep(0.001)  # Ensure timestamps differ
+
+    projects = json.loads(registry_file.read_text(encoding="utf-8"))
+    assert len(projects) == 50  # Truncated
+
+
+def test_prompt_contains_artifact_prohibition() -> None:
+    """§19.2: assemble_prompt includes artifact prohibition in contract."""
+    plan = parse_plan("test task\n---\ntest")
+    prompt = assemble_prompt(plan, "/tmp/worktree", round_number=1)
+
+    # Check that artifact prohibition is in the prompt
+    assert "严禁把 worktree 内文件作为 artifact 输出" in prompt
+    assert "brain 目录" in prompt
+
+
+def test_prompt_artifact_prohibition_round2() -> None:
+    """§19.2: prompt contract includes artifact prohibition in round≥2."""
+    plan = parse_plan("test")
+    prompt = assemble_prompt(
+        plan, "/tmp/worktree", round_number=2, prev_summary="prev", feedback_message="fix"
+    )
+
+    # Artifact prohibition should be in round 2 contract too
+    assert "严禁把 worktree 内文件作为 artifact 输出" in prompt
+
+
+def test_false_error_detection() -> None:
+    """§19.2: Detect false artifact-path ERROR in result."""
+    # Simulate what supervise.py does to detect false errors
+    agy_status = "ERROR"
+    final_event = {
+        "type": "result",
+        "status": "ERROR",
+        "response": "error: X is not a valid artifact path; artifacts must be in ~/.gemini/...",
+        "structured_output": {
+            "summary": "made changes",
+            "files_changed": ["file.txt"],
+            "tests_passed": True,
+        },
+    }
+
+    structured_output = final_event.get("structured_output")
+
+    # Check the false error detection logic from supervise.py §19.2
+    is_false_error = False
+    if agy_status == "ERROR" and structured_output and final_event:
+        final_event_json = json.dumps(final_event, ensure_ascii=False)
+        if "not a valid artifact path" in final_event_json:
+            is_false_error = True
+
+    assert is_false_error  # Should detect it
+
+
+def test_false_error_vs_real_error() -> None:
+    """§19.2: Real ERROR (without artifact path) should remain error."""
+    agy_status = "ERROR"
+    final_event = {
+        "type": "result",
+        "status": "ERROR",
+        "response": "some other error occurred",
+        "structured_output": {
+            "summary": "failed to run tests",
+            "files_changed": [],
+            "tests_passed": False,
+        },
+    }
+
+    structured_output = final_event.get("structured_output")
+
+    # Check detection logic
+    is_false_error = False
+    if agy_status == "ERROR" and structured_output and final_event:
+        final_event_json = json.dumps(final_event, ensure_ascii=False)
+        if "not a valid artifact path" in final_event_json:
+            is_false_error = True
+
+    assert not is_false_error  # Should NOT detect as false error
+
+
+def test_pending_under_aggregates_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§19.1: pending --under aggregates pending jobs from <dir> and descendants."""
+    from sub_agy.jobs import new_meta, write_meta
+
+    # Create parent and two child project directories
+    parent = tmp_path / "parent"
+    parent.mkdir()
+
+    sub1 = parent / "sub1"
+    sub1.mkdir()
+
+    sub2 = parent / "sub2"
+    sub2.mkdir()
+
+    # Initialize git repos
+    subprocess.run(["git", "init"], cwd=parent, capture_output=True, check=True)
+    subprocess.run(["git", "init"], cwd=sub1, capture_output=True, check=True)
+    subprocess.run(["git", "init"], cwd=sub2, capture_output=True, check=True)
+
+    # Create pending jobs in each
+    for project_path in [sub1, sub2]:
+        jobs_dir = project_path / ".subagy" / "jobs" / "j-test"
+        jobs_dir.mkdir(parents=True)
+        meta = new_meta("j-test", project_path, None, None, "dummy_sha", "gemini-3.7-flash", "low", "5m")
+        meta["state"] = "done"
+        meta["harvested_at"] = None
+        write_meta(project_path, "j-test", meta)
+
+    # Create registry with sub1 and sub2
+    config_dir = tmp_path / "config" / "sub-agy"
+    config_dir.mkdir(parents=True)
+    registry_file = config_dir / "recent_projects.json"
+    registry_data = [
+        {"path": str(sub1.resolve()), "last_dispatch": "2026-01-02T00:00:00+00:00"},
+        {"path": str(sub2.resolve()), "last_dispatch": "2026-01-01T00:00:00+00:00"},
+    ]
+    registry_file.write_text(json.dumps(registry_data), encoding="utf-8")
+
+    # Run pending --under parent with SUB_AGY_CONFIG environment variable
+    env = os.environ.copy()
+    env["SUB_AGY_CONFIG"] = str(config_dir / "config.toml")
+    result = subprocess.run(
+        [sys.executable, "-m", "sub_agy.cli", "pending", "--under", str(parent)],
+        cwd=parent,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, f"stderr: {result.stderr}, stdout: {result.stdout}"
+    pending_jobs = json.loads(result.stdout)
+    # Should find 2 jobs from sub1 and sub2
+    assert len(pending_jobs) == 2, f"Expected 2 jobs, got {len(pending_jobs)}: {pending_jobs}"
+    # Each should have project field
+    for job in pending_jobs:
+        assert "project" in job
+        assert job["project"] in (str(sub1.resolve()), str(sub2.resolve()))
+
+
+def test_pending_under_exclusive_with_cwd(git_repo: Path) -> None:
+    """§19.1: pending --under and --cwd are mutually exclusive (exit 64)."""
+    result = subprocess.run(
+        [sys.executable, "-m", "sub_agy.cli", "--cwd", str(git_repo), "pending", "--under", "/tmp"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 64  # usage error

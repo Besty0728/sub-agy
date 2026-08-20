@@ -1,5 +1,5 @@
 {
   "name": "subagy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "把 Antigravity CLI (agy) 接入 Claude Code，作为异步代码执行后端。支持派发计划、收割结果、状态查看与问题诊断。"
 }
