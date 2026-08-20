@@ -64,8 +64,8 @@
 | 命令 | 关键参数 | 行为 |
 |---|---|---|
 | `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`（默认 pwd）；`--model/--effort/--timeout`（覆盖配置）；`--no-worktree`；`--no-schema` | 校验→建 worktree→写 plan/prompt/schema/meta→spawn detached `_supervise`→**立即**打印 `{job_id, worktree, branch, events_log}` 并 exit 0 |
-| `status` | `<id>` \| `--all`；`--json` | state、round、elapsed、最近一条 step 摘要（events.ndjson 尾部解析）；含惰性 interrupted 和解 |
-| `result` | `<id>`；`--events`（附原始事件路径） | 打印 result.json 内容 + 现场计算 `git diff --stat <base_sha>..HEAD`；作业未完成时 exit 4 并打印当前状态 |
+| `status` | `<id>` \| `--all`；`--json`；`--pretty` | state、round、elapsed、tokens（input/output/total）、最近一条 step 摘要（events.ndjson 尾部解析）；含惰性 interrupted 和解。`--pretty` 输出带 elapsed（m:ss）与 tokens（k/M）列 |
+| `result` | `<id>`；`--events`（附原始事件路径） | 打印 result.json 内容（含 `usage`）+ 现场计算 `git diff --stat <base_sha>..HEAD`；作业未完成时 exit 4 并打印当前状态 |
 | `feedback` | `<id>` `<message>`；`--timeout` | 要求 meta.conversation_id 非空且 state 为 done/error；round+=1，spawn `_supervise --round N`，立即返回 |
 | `cancel` | `<id>` | SIGTERM 到 supervisor pid（其信号处理器负责杀 agy 进程组并落 cancelled）；supervisor 已死但 agy 活着则直接杀 agy pgid |
 | `list` | `--state` 过滤 | 扫描 jobs/，表格或 JSON |
@@ -240,14 +240,19 @@ agy-bridge watch <id> [id...] [--cwd P] [--interval 秒, 默认 2] [--timeout �
     "agy_status": "SUCCESS", "summary": "...",
     "contract_ok": true, "tests_passed": true,
     "elapsed_seconds": 12.3,
+    "tokens": {
+      "input": 1234,
+      "output": 567,
+      "total": 1801
+    },
     "diff_stat": "...",
     "result_path": "...", "events_path": "...",
     "worktree": "...", "branch": "agy/..."
   }
   ```
-  数据优先来自 `result.json`；缺失字段用 meta 兜底，`diff_stat` 缺失给空串。
+  数据优先来自 `result.json`；缺失字段用 meta 兜底，`tokens` 来自 `result.json` 的 `usage`（无 result 时为 `null`），`diff_stat` 缺失给空串。
 - 退出码：全部作业进入终态即返回 0；作业不存在返回 3；超时返回 124。
-- `--pretty`：紧凑表格（id/state/round/elapsed/contract_ok/summary 截断 60 字符）。
+- `--pretty`：紧凑表格（`job_id`、`state`、`round`、`elapsed`、`tokens`、`contract_ok`、`summary` 截断 60 字符；`elapsed` 按 `m:ss`、`tokens` 按 `k`/`M` 人性化显示）。
 
 ### 14.4 `run --wait`
 

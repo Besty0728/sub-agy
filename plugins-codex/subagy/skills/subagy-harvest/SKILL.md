@@ -46,16 +46,19 @@ sub-agy result <job-id> --cwd "<项目根>"
 
 - `files_changed_git`：变更文件列表
 - `diff_stat`：`git diff --stat` 文本
+- `usage`：`total_tokens` 等 token 消耗数据
 - `structured_output`：包含 `summary`、`files_changed`、`tests_ran`、`tests_passed`、`acceptance_met`、`blockers`、`followups`
 
 必要时查看 worktree 中的具体文件或执行 `git diff`。
 
 ### 4. 输出汇总表
 
-| job_id | contract_ok | tests_passed | 验收结论 | 建议动作 |
-|--------|-------------|--------------|----------|----------|
-| j-...  | true        | true         | 通过     | `git merge agy/j-...` |
-| j-...  | false       | true         | 不通过   | `sub-agy feedback j-... "..."` |
+列：`job_id / contract_ok / tests_passed / tokens / 用时 / 验收结论 / 建议动作`。（tokens 取 result.json `usage.total_tokens`，按 k/M 人性化显示；用时取 `elapsed_seconds`，按 m:ss 人性化显示）。
+
+| job_id | contract_ok | tests_passed | tokens | 用时 | 验收结论 | 建议动作 |
+|--------|-------------|--------------|--------|------|----------|----------|
+| j-...  | true        | true         | 448.3k | 5:13 | 通过     | `git merge agy/j-...` |
+| j-...  | false       | true         | 12.5k  | 0:45 | 不通过   | `sub-agy feedback j-... "..."` |
 
 ## 动作规则（铁律）
 

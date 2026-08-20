@@ -15,9 +15,9 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Codex 通过技�
 | 命令 | 关键参数 | 行为 |
 |---|---|---|
 | `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`；`--model/--effort/--timeout`；`--no-worktree`；`--no-schema`；`--wait` | 创建作业并 spawn detached supervisor。默认立即返回 `job_id`；`--wait` 会原地等待到终态并输出与 `watch` 相同的 JSON。 |
-| `status` | `<id>` \| `--all`；`--state`；`--pretty` | 查看作业状态、已运行时间、最近一步摘要。包含惰性 interrupted 和解。 |
-| `result` | `<id>`；`--events`；`--pretty` | 输出 `result.json` + `git diff --stat`。作业未完成时 exit 4。 |
-| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--pretty` | 轮询直到全部作业进入终态。超时 exit 124；全部终态 → 0。 |
+| `status` | `<id>` \| `--all`；`--state`；`--pretty` | 查看作业状态、已运行时间、tokens 消耗、最近一步摘要。包含惰性 interrupted 和解。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。 |
+| `result` | `<id>`；`--events`；`--pretty` | 输出 `result.json`（含 `usage`）+ `git diff --stat`。作业未完成时 exit 4。 |
+| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--pretty` | 轮询直到全部作业进入终态。输出含 tokens 字段。超时 exit 124；全部终态 → 0。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。 |
 | `feedback` | `<id> "<message>"` | 在保留 conversation 的前提下启动新一轮修复。要求状态为 done/error 且 conversation_id 存在。 |
 | `cancel` | `<id>` | 向 supervisor 发送 SIGTERM；supervisor 负责杀掉 agy 进程组并落 `cancelled` 状态。 |
 | `list` | `--state`；`--pretty` | 列出所有作业。 |

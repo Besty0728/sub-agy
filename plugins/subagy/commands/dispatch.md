@@ -17,7 +17,7 @@ $ARGUMENTS 的解析规则：
 
 批量派发时逐个 run，任意一个失败也不中断后续派发，但在最终汇总中标记失败原因。
 
-输出格式：每个作业一张紧凑 markdown 卡片。
+输出格式：每个作业一张紧凑 markdown 卡片（完成后 tokens 消耗与用时见 harvest）。
 
 **watcher 主动通知**：派发汇报完所有作业卡片后，用 Bash run_in_background 启动后台 watcher：
 

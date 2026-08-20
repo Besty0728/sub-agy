@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .jobs import elapsed_seconds, events_path, read_meta, reconcile_state, result_path, write_meta
-from .schema import EXIT_CODES
+from .schema import EXIT_CODES, extract_tokens, fmt_elapsed, fmt_tokens
 
 TERMINAL_STATES = {"done", "error", "cancelled", "interrupted"}
 
@@ -28,6 +28,8 @@ def _build_job_summary(project: Path, job_id: str, meta: dict) -> dict:
     if tests_passed is None and structured is not None:
         tests_passed = structured.get("tests_passed")
 
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
+
     return {
         "job_id": meta.get("id", job_id),
         "state": meta.get("state"),
@@ -37,6 +39,7 @@ def _build_job_summary(project: Path, job_id: str, meta: dict) -> dict:
         "contract_ok": result.get("contract_ok", False) if result else False,
         "tests_passed": tests_passed,
         "elapsed_seconds": elapsed_seconds(meta),
+        "tokens": extract_tokens(usage),
         "diff_stat": result.get("diff_stat", "") if result else "",
         "result_path": str(rpath),
         "events_path": str(events_path(project, job_id)),
@@ -55,16 +58,18 @@ def _print_summaries(summaries: list[dict], pretty: bool) -> None:
     if pretty:
         print(
             f"{'job_id':<30} {'state':<12} {'round':>5} "
-            f"{'elapsed':>10} {'contract_ok':>10} {'summary'}"
+            f"{'elapsed':>10} {'tokens':>10} {'contract_ok':>10} {'summary'}"
         )
         for s in summaries:
-            elapsed = s.get("elapsed_seconds")
-            elapsed_str = f"{elapsed:.1f}" if elapsed is not None else "-"
+            elapsed_str = fmt_elapsed(s.get("elapsed_seconds"))
+            tokens_val = s.get("tokens")
+            total_tokens = tokens_val.get("total") if isinstance(tokens_val, dict) else None
+            tokens_str = fmt_tokens(total_tokens)
             contract = "true" if s.get("contract_ok") else "false"
             summary = (s.get("summary") or "")[:60]
             print(
                 f"{s['job_id']:<30} {s['state']:<12} {s.get('round', 1):>5} "
-                f"{elapsed_str:>10} {contract:>10} {summary}"
+                f"{elapsed_str:>10} {tokens_str:>10} {contract:>10} {summary}"
             )
     else:
         print(json.dumps(summaries, indent=2, ensure_ascii=False))

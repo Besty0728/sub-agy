@@ -29,7 +29,7 @@ from .jobs import (
 )
 from .plan import Plan, assemble_prompt, parse_plan, write_plan_files
 from .quota import fetch_quota
-from .schema import EXIT_CODES, RESULT_SCHEMA
+from .schema import EXIT_CODES, RESULT_SCHEMA, extract_tokens, fmt_elapsed, fmt_tokens
 from .supervise import supervise_round
 from .watch import watch_jobs
 from .worktree import (
@@ -188,6 +188,17 @@ def cmd_run(args) -> None:
     sys.exit(EXIT_CODES["success"])
 
 
+def _read_job_tokens(project: Path, job_id: str) -> dict[str, int | None] | None:
+    rpath = result_path(project, job_id)
+    if not rpath.exists():
+        return None
+    try:
+        result = json.loads(rpath.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return extract_tokens(result.get("usage"))
+
+
 def cmd_status(args) -> None:
     project = _resolve_project(args)
     if args.all:
@@ -198,11 +209,28 @@ def cmd_status(args) -> None:
                 "state": m["state"],
                 "round": m.get("round"),
                 "elapsed": elapsed_seconds(m),
+                "tokens": _read_job_tokens(project, m["id"]),
                 "summary": latest_step_summary(project, m["id"]),
             }
             for m in jobs
         ]
-        print(_fmt_json(data, args.pretty))
+        if args.pretty:
+            print(
+                f"{'id':<30} {'state':<12} {'round':>5} "
+                f"{'elapsed':>10} {'tokens':>10} {'summary'}"
+            )
+            for item in data:
+                elapsed_str = fmt_elapsed(item.get("elapsed"))
+                tokens_val = item.get("tokens")
+                total_tokens = tokens_val.get("total") if isinstance(tokens_val, dict) else None
+                tokens_str = fmt_tokens(total_tokens)
+                summary = (item.get("summary") or "")[:60]
+                print(
+                    f"{item['id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
+                    f"{elapsed_str:>10} {tokens_str:>10} {summary}"
+                )
+        else:
+            print(_fmt_json(data, False))
         return
 
     if not args.id:
@@ -218,6 +246,7 @@ def cmd_status(args) -> None:
         "state": meta["state"],
         "round": meta.get("round"),
         "elapsed": elapsed_seconds(meta),
+        "tokens": _read_job_tokens(project, args.id),
         "agy_status": meta.get("agy_status"),
         "summary": latest_step_summary(project, args.id),
     }

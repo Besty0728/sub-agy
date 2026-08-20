@@ -168,15 +168,60 @@ def test_watch_pretty_output(tmp_project: Path) -> None:
     meta["agy_status"] = "SUCCESS"
     write_meta(tmp_project, job_id, meta)
     result_path(tmp_project, job_id).write_text(
-        json.dumps({"job_id": job_id, "state": "done", "summary": "x" * 80}),
+        json.dumps({
+            "job_id": job_id,
+            "state": "done",
+            "summary": "x" * 80,
+            "usage": {
+                "input_tokens": 400000,
+                "output_tokens": 48266,
+                "total_tokens": 448266,
+            },
+        }),
         encoding="utf-8",
     )
     result = _run_watch(tmp_project, job_id, "--pretty")
     assert result.returncode == 0, result.stderr
     assert job_id in result.stdout
     assert "done" in result.stdout
+    assert "tokens" in result.stdout.lower()
+    assert "elapsed" in result.stdout.lower()
+    assert "448.3k" in result.stdout
     # summary should be truncated to 60 chars in pretty mode
     assert "x" * 61 not in result.stdout
+
+
+def test_build_job_summary_tokens(tmp_project: Path) -> None:
+    job_id = "j-tokens"
+    meta = _make_meta(tmp_project, job_id, "done")
+    write_meta(tmp_project, job_id, meta)
+
+    # With usage
+    result_path(tmp_project, job_id).write_text(
+        json.dumps({
+            "job_id": job_id,
+            "state": "done",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "total_tokens": 1200,
+            },
+        }),
+        encoding="utf-8",
+    )
+    summary = _build_job_summary(tmp_project, job_id, meta)
+    assert summary["tokens"] == {"input": 1000, "output": 200, "total": 1200}
+
+    # Without usage
+    result_path(tmp_project, job_id).write_text(
+        json.dumps({
+            "job_id": job_id,
+            "state": "done",
+        }),
+        encoding="utf-8",
+    )
+    summary_no_usage = _build_job_summary(tmp_project, job_id, meta)
+    assert summary_no_usage["tokens"] is None
 
 
 def test_build_job_summary_fallbacks(tmp_project: Path) -> None:
@@ -193,6 +238,7 @@ def test_build_job_summary_fallbacks(tmp_project: Path) -> None:
     assert summary["branch"] == "agy/j-fallback"
     assert summary["diff_stat"] == ""
     assert summary["contract_ok"] is False
+    assert summary["tokens"] is None
 
 
 def test_run_wait_end_to_end(git_repo: Path, run_bridge) -> None:

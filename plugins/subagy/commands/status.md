@@ -16,4 +16,5 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" status $ARGUMENTS --pretty
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" status --all --pretty
 ```
 
+展示字段包含作业状态、已运行/耗费时间（elapsed）、tokens 消耗以及最近一步摘要。
 将命令输出**逐字**贴进回复，不要总结、改写或省略内容。

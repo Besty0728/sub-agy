@@ -15,8 +15,8 @@ allowed-tools: Bash, Read
 2. 若用户指定了一个或多个 job-id，则只收割这些作业（仍建议先 status 确认它们已完成）。
 3. 对每个目标作业：
    - 执行 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" result <job-id> --cwd "${CLAUDE_PROJECT_DIR:-$PWD}"` 拿到结构化验收单。
-   - 用 Read 查看 result.json 中的 `files_changed_git`、`diff_stat`，必要时查看 worktree 中的具体文件或执行 `git diff`。
-4. 输出汇总表，列：job_id / contract_ok / tests_passed / 验收结论 / 建议动作。
+   - 用 Read 查看 result.json 中的 `files_changed_git`、`diff_stat`、`usage`，必要时查看 worktree 中的具体文件或执行 `git diff`。
+4. 输出汇总表，列：job_id / contract_ok / tests_passed / tokens / 用时 / 验收结论 / 建议动作。（tokens 取 result.json `usage.total_tokens`，按 k/M 人性化显示；用时取 `elapsed_seconds`，按 m:ss 人性化显示）。
 
 **动作规则（硬性）**：
 - 验收不通过（`contract_ok` 为 false，或 `tests_passed` 为 false，或 diff/文件不符合预期）→ **自动**执行 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" feedback <job-id> "<具体、可操作的修复要求>"` 打回。这是设计目的：打回自动化。

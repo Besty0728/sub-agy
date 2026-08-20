@@ -58,7 +58,7 @@ sub-agy watch <job-id> [job-id...] --cwd "<项目根>" --timeout <按任务规�
 
 - `watch` 会轮询每个作业，直到**全部**进入终态（`done`/`error`/`cancelled`/`interrupted`）。
 - 超时 exit 124，但仍会打印当前状态；此时可重新执行 `sub-agy watch <job-id> --cwd <根>` **续等**（幂等）。
-- 全部终态后，`watch` 输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, diff_stat, result_path, events_path, worktree, branch`。
+- 全部终态后，`watch` 输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, tokens, diff_stat, result_path, events_path, worktree, branch`。
 - 退出码：全部作业进入终态 → 0；job 不存在 → 3；超时 → 124。
 
 ## watch 返回后的处理
@@ -71,9 +71,9 @@ sub-agy watch <job-id> [job-id...] --cwd "<项目根>" --timeout <按任务规�
 
 ## 输出示例
 
-派发后向用户汇报：
+派发后向用户汇报（作业卡片中注明完成后 tokens/用时见 harvest）：
 
-> 已派发作业 `j-20260820-120000-ab12`，分支 `agy/j-20260820-120000-ab12`，正在 watch 阻塞等待完成...
+> 已派发作业 `j-20260820-120000-ab12`，分支 `agy/j-20260820-120000-ab12`，正在 watch 阻塞等待完成（完成后 tokens/用时见 harvest 汇总）...
 
 ## 回退方式
 
