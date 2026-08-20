@@ -1,0 +1,87 @@
+## agy-bridge 接入说明（v1.2）
+
+当需要把**规划好的代码执行任务**交给异步后端执行时，使用 `agy-bridge`。它会在本地调用 Antigravity CLI (`agy`)，在独立 git worktree 里非交互完成作业，并把结构化结果返回给你。
+
+> 提示：以下命令假设 `agy-bridge` 已安装（推荐 `uv tool install --editable /path/to/agy-bridge`）。若未安装，可 `export AGY_BRIDGE_HOME=/path/to/agy-bridge` 后使用 `uv run --project "$AGY_BRIDGE_HOME" agy-bridge ...`。
+>
+> 桌面端用户建议直接安装 Codex 插件市场版本；本片段为无插件环境的兜底指南。
+
+### 派发 → watch 阻塞等待 → 验收流程
+
+```bash
+# 1. 派发计划（run 立即返回 job_id，后台执行；--wait 则原地阻塞等待）
+agy-bridge run --plan task.md --cwd ./my-project [--model gemini-3.7-flash] [--effort low|medium|high] [--timeout 30m] [--auto-approve]
+
+# 2. 阻塞等待作业进入终态（Codex 桌面端无后台唤醒，需要原地 watch）
+agy-bridge watch <job-id> --cwd ./my-project --timeout 30m
+
+# 若 watch 被平台超时截断，重新执行即可续等（幂等）
+agy-bridge watch <job-id> --cwd ./my-project --timeout 30m
+
+# 3. 收割结果（作业 done/error 后才能调用）
+agy-bridge result <job-id> --cwd ./my-project
+
+# 4. 反馈并要求再修一轮（仅 done/error）
+agy-bridge feedback <job-id> "把测试也补上，不要修改 scope 外文件"
+
+# 5. 取消与清理
+agy-bridge cancel <job-id> --cwd ./my-project
+agy-bridge cleanup <job-id> --purge --delete-branch --cwd ./my-project
+
+# 6. 免费查额度（0 token）
+agy-bridge quota --pretty
+
+# 7. 环境诊断
+agy-bridge doctor --pretty
+```
+
+### 批量派发
+
+多个计划文件时逐个 `run`，收集所有 `job_id` 后一次 `watch`：
+
+```bash
+agy-bridge run --plan a.md --cwd ./my-project
+agy-bridge run --plan b.md --cwd ./my-project
+agy-bridge watch j-... j-... --cwd ./my-project --timeout 30m
+```
+
+### 作业目录
+
+每个作业对应：
+
+```
+<project>/.agybridge/jobs/<job_id>/
+├── meta.json       # 状态、分支、pid 等
+├── plan.md         # 计划原文
+├── prompt.txt      # 发给 agy 的完整 prompt
+├── schema.json     # 结构化输出 schema
+├── events.ndjson   # stream-json 原始事件
+├── stderr.log      # agy stderr
+└── result.json     # 结构化验收单
+```
+
+worktree 位于 `<project>/.agybridge/worktrees/<job_id>/`，分支为 `agy/<job_id>`。
+
+### 验收单字段
+
+`result.json` 关键字段：
+
+- `contract_ok`：是否按 schema 返回结构化结果。
+- `tests_passed`：agy 自报的测试是否通过。
+- `files_changed_git`：git diff 变更文件列表。
+- `diff_stat`：`git diff --stat` 文本。
+- `structured_output`：结构化对象，含 `summary`、`blockers`、`followups` 等。
+- `recovered_from_transcript`：是否从 agy stdout bug 兜底恢复。
+
+### 铁律
+
+- **绝不要合并或清理由 agy-bridge 创建的 `agy/<job_id>` 分支/worktree**，除非用户明确说可以。收割结果后只给出合并建议。
+- **不要打断 running 作业**：`feedback`、`cleanup` 只应在 `done`/`error` 状态使用。running 作业让用户等待或 `cancel`。
+- 派发计划后必须 `watch` 阻塞等待；若平台超时截断，重新执行 `watch` 即可续等。
+- 验收不通过时自动 `agy-bridge feedback <job-id> "<具体修复要求>"` 打回；验收通过只建议 `git merge agy/<job-id>`。
+
+### 与 agy 的边界
+
+- agy-bridge 只做进程编排，**不持有任何 API key，不经过任何中转代理**。
+- 所有 LLM 调用由用户本机的 `agy` 完成；权限、白名单、模型选择都在 agy 侧配置。
+- 如需无人值守，引导用户在 `~/.gemini/antigravity-cli/settings.json` 配置 `permissions.allow` 白名单（如 `command(git)`、`command(pytest)`），而不是使用 `--auto-approve` 裸奔。

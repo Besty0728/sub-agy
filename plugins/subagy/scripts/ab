@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# sub-agy 解析器：优先已安装二进制，其次源码仓库回退
+if command -v sub-agy >/dev/null 2>&1; then
+  exec sub-agy "$@"
+fi
+if [ -n "${SUB_AGY_HOME:-}" ] && [ -f "${SUB_AGY_HOME}/pyproject.toml" ]; then
+  exec uv run --project "$SUB_AGY_HOME" sub-agy "$@"
+fi
+echo "sub-agy not found. Install: uv tool install --editable <repo-path>  (or export SUB_AGY_HOME=<repo-path>)" >&2
+exit 127

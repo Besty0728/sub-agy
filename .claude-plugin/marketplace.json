@@ -1,0 +1,14 @@
+{
+  "name": "subagy",
+  "owner": {
+    "name": "betsy"
+  },
+  "plugins": [
+    {
+      "name": "subagy",
+      "version": "0.1.0",
+      "description": "把 Antigravity CLI (agy) 接入 Claude Code，作为异步代码执行后端。",
+      "source": "./plugins/subagy"
+    }
+  ]
+}

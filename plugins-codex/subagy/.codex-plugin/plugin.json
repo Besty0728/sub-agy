@@ -1,0 +1,27 @@
+{
+  "name": "subagy",
+  "version": "0.1.0",
+  "description": "把 Google Antigravity CLI (agy) 变成 Codex 的异步作业执行后端：派发计划、后台执行、结构化验收。",
+  "author": {
+    "name": "betsy"
+  },
+  "license": "MIT",
+  "interface": {
+    "displayName": "sub-agy",
+    "shortDescription": "把 agy 变成 Codex 的异步代码执行后端",
+    "longDescription": "sub-agy 在本地调用 Antigravity CLI (agy)，在独立 git worktree 里非交互完成作业，并把结构化结果返回给 Codex。规划侧只做任务拆解、写计划、审查结果；执行侧交给 sub-agy 后台调度，让模型额度花在思考与验收上。",
+    "developerName": "betsy",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "派发计划：把这份需求写成 .subagy/inbox 下的计划文件并用 sub-agy run 执行",
+      "收割验收：查看当前项目所有 done/error 的 sub-agy 作业并给出合并或打回建议",
+      "查看作业状态：列出 sub-agy 作业的状态、轮次和已运行时间"
+    ],
+    "brandColor": "#10B981"
+  },
+  "skills": "./skills/"
+}

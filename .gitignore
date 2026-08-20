@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# sub-agy 运行时数据（作业日志、worktree、inbox 计划）
+.subagy/
+
+# OS
+.DS_Store
