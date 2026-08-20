@@ -41,6 +41,8 @@ flowchart LR
 
 ## Installation
 
+> **The CLI is required — plugins alone do not work.** The Claude Code / Codex / Kimi Code plugins are thin orchestration layers: every plugin command shells out to the `sub-agy` binary and fails with exit 127 if it is missing. If you prefer not to install it globally, the only fallback is cloning the repo and setting `export SUB_AGY_HOME=<repo path>` — the plugins then run it from source via `uv run --project`, which still requires uv.
+
 ### CLI (no clone needed)
 
 ```bash
@@ -89,6 +91,22 @@ source = "<path to clone>"
 ```
 
 Commands are namespaced: `/subagy:dispatch`, `/subagy:harvest`, etc. After dispatch, each job is watched by a background `subagy-watcher` subagent that returns to the main agent the moment the job finishes. For local development use `/plugins install <path to clone>` (the plugin is copied to `$KIMI_CODE_HOME/plugins/managed/`; reinstall after editing sources).
+
+## Configuration (optional)
+
+sub-agy runs fine with zero configuration. To change defaults, create `~/.config/sub-agy/config.toml` (override the location with the `SUB_AGY_CONFIG` environment variable). Every key is optional; the values below are the built-in defaults:
+
+```toml
+default_model = "gemini-3.7-flash"  # model slug passed to agy
+default_effort = "medium"           # low | medium | high
+default_timeout = "30m"             # per-job timeout, Go duration (Ns/Nm/Nh)
+max_concurrent = 3                  # jobs running at once per project; extras queue FIFO
+max_retries = 1                     # extra attempts after a timeout
+queue_timeout = "2h"                # max wait for a run slot before the job errors
+agy_bin = "agy"                     # agy binary name or absolute path
+```
+
+A missing file simply means the defaults above. Per-job CLI flags (`--model` / `--effort` / `--timeout`) override the config.
 
 ## Quick start
 

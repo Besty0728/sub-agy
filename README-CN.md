@@ -41,6 +41,8 @@ flowchart LR
 
 ## 安装
 
+> **CLI 是必装项——只装插件不能用。** Claude Code / Codex / Kimi Code 三端插件都只是薄薄的编排层:每个插件命令最终都要调用 `sub-agy` 二进制,找不到就以 exit 127 报错。若不想全局安装,唯一的替代是 clone 本仓库并 `export SUB_AGY_HOME=<仓库路径>`——插件会经 `uv run --project` 从源码运行它,但这仍需要 uv。
+
 ### CLI(无需 clone)
 
 ```bash
@@ -89,6 +91,22 @@ source = "<clone 路径>"
 ```
 
 安装后命令带命名空间:`/subagy:dispatch`、`/subagy:harvest` 等。派发后每个作业由一个后台 `subagy-watcher` subagent 盯守,完成即自动回到主 agent 收割。本地开发可 `/plugins install <clone 路径>`(会拷贝到 `$KIMI_CODE_HOME/plugins/managed/`,改源码需重装)。
+
+## 配置(可选)
+
+sub-agy 零配置即可运行。需要改默认值时,创建 `~/.config/sub-agy/config.toml`(可用环境变量 `SUB_AGY_CONFIG` 覆盖路径)。所有字段均可选,以下即内置默认值:
+
+```toml
+default_model = "gemini-3.7-flash"  # 传给 agy 的模型 slug
+default_effort = "medium"           # low | medium | high
+default_timeout = "30m"             # 单作业超时,Go duration 格式(Ns/Nm/Nh)
+max_concurrent = 3                  # 每项目同时 running 的作业数,超出按 FIFO 排队
+max_retries = 1                     # 超时后的额外重试次数
+queue_timeout = "2h"                # 等运行槽位的上限,超时作业置 error
+agy_bin = "agy"                     # agy 二进制名或绝对路径
+```
+
+文件不存在就等于上面的默认值。单作业旗标(`--model` / `--effort` / `--timeout`)优先于配置文件。
 
 ## 快速上手
 
