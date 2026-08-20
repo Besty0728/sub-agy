@@ -35,7 +35,7 @@ def test_transcript_fallback(
     time.sleep(0.1)
 
     config_path = git_repo / "test-config.toml"
-    config_path.write_text(f'agy_bin = "{fake_agy}"\nauto_approve = true\n', encoding="utf-8")
+    config_path.write_text(f'agy_bin = "{fake_agy}"\n', encoding="utf-8")
     monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
 
     job_id = "j-fallback"
@@ -55,7 +55,6 @@ def test_transcript_fallback(
         "model": "gemini-3.7-flash",
         "effort": "low",
         "timeout": "5m",
-        "auto_approve": True,
         "conversation_id": None,
         "agy_status": None,
         "exit_code": None,
@@ -105,7 +104,7 @@ def test_transcript_fallback_content_blocks(
     time.sleep(0.1)
 
     config_path = git_repo / "test-config.toml"
-    config_path.write_text(f'agy_bin = "{fake_agy}"\nauto_approve = true\n', encoding="utf-8")
+    config_path.write_text(f'agy_bin = "{fake_agy}"\n', encoding="utf-8")
     monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
 
     job_id = "j-blocks"
@@ -125,7 +124,6 @@ def test_transcript_fallback_content_blocks(
         "model": "gemini-3.7-flash",
         "effort": "low",
         "timeout": "5m",
-        "auto_approve": True,
         "conversation_id": None,
         "agy_status": None,
         "exit_code": None,

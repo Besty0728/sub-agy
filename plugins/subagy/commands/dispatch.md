@@ -1,6 +1,6 @@
 ---
 description: 派发一个或多个计划给 sub-agy 异步执行
-argument-hint: "<plan.md|raw task> [--model ...] [--effort ...] [--timeout ...] [--auto-approve] [--no-worktree]"
+argument-hint: "<plan.md|raw task> [--model ...] [--effort ...] [--timeout ...] [--no-worktree]"
 allowed-tools: Bash, Read, Write
 ---
 

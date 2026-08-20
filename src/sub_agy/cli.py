@@ -80,8 +80,6 @@ def cmd_run(args) -> None:
         except ValueError as exc:
             _json_error(str(exc), EXIT_CODES["usage"])
         config = Config(**{**config.__dict__, "default_timeout": args.timeout})
-    if args.auto_approve:
-        config = Config(**{**config.__dict__, "auto_approve": True})
 
     project = _resolve_project(args)
 
@@ -149,7 +147,6 @@ def cmd_run(args) -> None:
         config.default_model,
         config.default_effort,
         config.default_timeout,
-        auto_approve=config.auto_approve,
     )
     write_meta(project, job_id, meta)
 
@@ -165,8 +162,6 @@ def cmd_run(args) -> None:
         "--round",
         "1",
     ]
-    if args.auto_approve:
-        supervisor_argv.append("--auto-approve")
 
     proc = subprocess.Popen(
         supervisor_argv,
@@ -187,7 +182,7 @@ def cmd_run(args) -> None:
     }
 
     if args.wait:
-        sys.exit(watch_jobs(project, [job_id], interval=2.0, timeout=3600.0, pretty=args.pretty))
+        sys.exit(watch_jobs(project, [job_id], interval=2.0, timeout=3600.0, pretty=args.pretty, strict=True))
 
     print(_fmt_json(output, args.pretty))
     sys.exit(EXIT_CODES["success"])
@@ -545,7 +540,6 @@ def build_parser() -> None:
     run_p.add_argument("--model", help="model slug")
     run_p.add_argument("--effort", choices=["low", "medium", "high"], help="effort level")
     run_p.add_argument("--timeout", help="Go duration e.g. 30m")
-    run_p.add_argument("--auto-approve", action="store_true", help="skip permissions")
     run_p.add_argument("--no-worktree", action="store_true", help="run directly in cwd")
     run_p.add_argument("--no-schema", action="store_true", help=argparse.SUPPRESS)
     run_p.add_argument(
@@ -616,7 +610,6 @@ def build_parser() -> None:
     sup_p = sub.add_parser("_supervise", help=argparse.SUPPRESS)
     sup_p.add_argument("id", help="job id")
     sup_p.add_argument("--round", type=int, default=1)
-    sup_p.add_argument("--auto-approve", action="store_true", help=argparse.SUPPRESS)
     sup_p.set_defaults(func=cmd_supervise)
 
     return parser

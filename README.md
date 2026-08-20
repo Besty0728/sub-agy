@@ -136,7 +136,7 @@ weekly                99.8 2026-08-26T18:35:04Z        6 days, 11 hours
 ## 安全与合规
 
 - **纯官方 CLI 进程编排**：sub-agy 不接触任何模型 API，不存储、不中转 API key。
-- **默认沙箱**：agy 默认以 `--sandbox` 运行，工具调用需逐条批准；无人值守时推荐在 agy 侧配置白名单，或使用显式 `--auto-approve`。
+- **全自动 + worktree 隔离 + 人工合并**：agy 永远以 `--dangerously-skip-permissions` 启动以支持无人值守执行；安全边界由独立 git worktree 隔离、计划约束以及永远由人工触发的 `git merge` 共同承担。
 - **自动打回、人工合并**：`feedback` 自动保留上下文并重新执行；`git merge agy/<job-id>` 永远由用户手动触发。
 
 ## License

@@ -14,10 +14,9 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Claude Code 通�
   - 轮询每个作业直到全部进入终态。
   - 任一 id 不存在时立即 exit 3。
   - interval 越界（不在 0.5–60 秒之间）exit 64。
-  - timeout 超时后仍打印当前状态并 exit 124。
   - 全部终态时输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, diff_stat, result_path, events_path, worktree, branch`。
-  - 退出码：全 done → 0；有任何 error/cancelled/interrupted → 1。
-- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" run --plan <file.md> --cwd <project> [--model ...] [--effort ...] [--timeout ...] [--auto-approve] [--no-worktree] [--wait]`
+  - 退出码：全部作业进入终态 → 0；job 不存在 → 3；超时 → 124。
+- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" run --plan <file.md> --cwd <project> [--model ...] [--effort ...] [--timeout ...] [--no-worktree] [--wait]`
   - 创建作业，写入 plan/prompt/schema/meta，spawn detached supervisor，默认立即返回 job_id。
   - 加 `--wait` 时不立即退出，原地等待该作业到终态，输出与 `watch` 相同的 JSON 对象并遵循相同退出码。
 - `bash "${CLAUDE_PLUGIN_ROOT}/scripts/ab" status <job-id> | --all [--pretty]`

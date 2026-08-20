@@ -14,10 +14,10 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Codex 通过技�
 
 | 命令 | 关键参数 | 行为 |
 |---|---|---|
-| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`；`--model/--effort/--timeout`；`--auto-approve`；`--no-worktree`；`--no-schema`；`--wait` | 创建作业并 spawn detached supervisor。默认立即返回 `job_id`；`--wait` 会原地等待到终态并输出与 `watch` 相同的 JSON。 |
+| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`；`--model/--effort/--timeout`；`--no-worktree`；`--no-schema`；`--wait` | 创建作业并 spawn detached supervisor。默认立即返回 `job_id`；`--wait` 会原地等待到终态并输出与 `watch` 相同的 JSON。 |
 | `status` | `<id>` \| `--all`；`--state`；`--pretty` | 查看作业状态、已运行时间、最近一步摘要。包含惰性 interrupted 和解。 |
 | `result` | `<id>`；`--events`；`--pretty` | 输出 `result.json` + `git diff --stat`。作业未完成时 exit 4。 |
-| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--pretty` | 轮询直到全部作业进入终态。超时 exit 124；全 done → 0；有任何 error/cancelled/interrupted → 1。 |
+| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--pretty` | 轮询直到全部作业进入终态。超时 exit 124；全部终态 → 0。 |
 | `feedback` | `<id> "<message>"` | 在保留 conversation 的前提下启动新一轮修复。要求状态为 done/error 且 conversation_id 存在。 |
 | `cancel` | `<id>` | 向 supervisor 发送 SIGTERM；supervisor 负责杀掉 agy 进程组并落 `cancelled` 状态。 |
 | `list` | `--state`；`--pretty` | 列出所有作业。 |
@@ -75,8 +75,8 @@ queued → running → done | error | cancelled | interrupted
 
 | 码 | 含义 |
 |---|---|
-| 0 | 成功 |
-| 1 | 通用错误；watch 中有任何 error/cancelled/interrupted 作业 |
+| 0 | 成功；watch 作业全部进入终态 |
+| 1 | 通用错误；run --wait 中有任何 error/cancelled/interrupted 作业 |
 | 3 | 作业不存在 |
 | 4 | 作业未完成（result 时） |
 | 5 | 超过并发上限 |
@@ -105,7 +105,7 @@ queued → running → done | error | cancelled | interrupted
 
 - **stdout bug 兜底**：非 TTY 下 `agy -p` 偶发"模型已响应但 stdout 为空"。sub-agy 内置兜底：读 `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl`，取最后一条 assistant 文本。触发时 `result.recovered_from_transcript=true`。
 - **禁止 `--continue`**：agl-bridge 使用 `--conversation <id>` 续会话，因为全局最近会话有并发竞争。
-- **权限策略**：未批准的工具调用会被 soft-deny 且进程仍 exit 0，所以执行类任务需要 `--auto-approve` 或用户预配 `permissions.allow` 白名单。
+- **权限策略**：sub-agy 恒以 `--dangerously-skip-permissions` 启动 agy 实现无人值守；安全边界由 git worktree 隔离 + 人工合并保障。
 - **round≥2 schema 降级**：若带 `--json-schema` 的调用在 round≥2 以参数错误失败，sub-agy 会去掉 schema 重试一次，并在 result 标 `contract_ok=false, contract_note="schema dropped on round>=2"`。
 
 ## 反馈轮次语义

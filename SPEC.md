@@ -10,10 +10,10 @@
 > - `--output-format text|json|stream-json`；json 信封字段：`conversation_id, status, response, error, duration_seconds, num_turns, structured_output, usage`（`structured_output` 仅在传 `--json-schema` 时出现）
 > - `--json-schema` 接受 schema 字符串或 `.json` 文件路径；实测 `structured_output` 正确填充
 > - `--conversation <id>` 续会话（**禁止用 `--continue`**，全局最近会话有并发竞争）
-> - `--print-timeout`（默认 5m，Go duration 格式如 `30m`）；`--cwd <dir>`；`--sandbox`；`--dangerously-skip-permissions`
+> - `--print-timeout`（默认 5m，Go duration 格式如 `30m`）；`--cwd <dir>`；`--dangerously-skip-permissions`
 > - status 值：`SUCCESS|ERROR|CANCELED|INTERRUPTED|INVALID|WAITING|RUNNING`
 > - **已知 bug**：非 TTY 下 `agy -p` 偶发"模型已响应但 stdout 为空"。兜底：读 `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl`（该路径格式已实测存在），取最后一条 assistant 文本
-> - 权限策略：未批准的工具调用会被 soft-deny 且进程仍 exit 0（所以执行类任务需要 `auto_approve` 或用户预配 permissions.allow 白名单）
+> - 权限策略：`--dangerously-skip-permissions` 恒定追加（无人值守定位）
 
 ## 1. 形态与打包
 
@@ -63,7 +63,7 @@
 
 | 命令 | 关键参数 | 行为 |
 |---|---|---|
-| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`（默认 pwd）；`--model/--effort/--timeout`（覆盖配置）；`--auto-approve`；`--no-worktree`；`--no-schema` | 校验→建 worktree→写 plan/prompt/schema/meta→spawn detached `_supervise`→**立即**打印 `{job_id, worktree, branch, events_log}` 并 exit 0 |
+| `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`（默认 pwd）；`--model/--effort/--timeout`（覆盖配置）；`--no-worktree`；`--no-schema` | 校验→建 worktree→写 plan/prompt/schema/meta→spawn detached `_supervise`→**立即**打印 `{job_id, worktree, branch, events_log}` 并 exit 0 |
 | `status` | `<id>` \| `--all`；`--json` | state、round、elapsed、最近一条 step 摘要（events.ndjson 尾部解析）；含惰性 interrupted 和解 |
 | `result` | `<id>`；`--events`（附原始事件路径） | 打印 result.json 内容 + 现场计算 `git diff --stat <base_sha>..HEAD`；作业未完成时 exit 4 并打印当前状态 |
 | `feedback` | `<id>` `<message>`；`--timeout` | 要求 meta.conversation_id 非空且 state 为 done/error；round+=1，spawn `_supervise --round N`，立即返回 |
@@ -93,7 +93,7 @@
     "--output-format", "stream-json", "--model", model, "--effort", effort,
     "--print-timeout", timeout, "--json-schema", str(schema_path)]
    # round≥2: 追加 ["--conversation", conversation_id]
-   # auto_approve: 追加 ["--dangerously-skip-permissions"]；否则追加 ["--sandbox"]
+   # 无条件追加 ["--dangerously-skip-permissions"]（无人值守执行）
    ```
 3. `subprocess.Popen`（`start_new_session=True`，stdout=PIPE 逐行读写 events.ndjson，stderr 写 stderr.log）。记录 pid_agy。
 4. 墙钟上限 = timeout 解析为秒 + 60s 宽限；超时 → 杀进程组（`os.killpg`）→ **换新进程重试**，最多 `max_retries`（默认 1）次 → 仍失败 state=error。
@@ -180,7 +180,6 @@ default_effort = "medium"
 default_timeout = "30m"     # Go duration
 max_concurrent = 3          # 每项目
 max_retries = 1
-auto_approve = false        # 全局默认；--auto-approve 覆盖
 agy_bin = "agy"
 ```
 
@@ -188,8 +187,7 @@ timeout 解析支持 `Ns/Nm/Nh`（`90s`/`30m`/`1h`），非法值 exit 64。
 
 ## 9. 安全默认
 
-- 永不默认加 `--dangerously-skip-permissions`；`auto_approve=false` 时改为传 `--sandbox`。
-- README 引导用户在 `~/.gemini/antigravity-cli/settings.json` 配 `permissions.allow` 白名单（如 `command(git)`、`command(pytest)`）以获得无人值守能力而不裸奔。
+- agy 永远以 `--dangerously-skip-permissions` 启动；sub-agy 的安全边界 = git worktree 隔离 + 合并永远人工 + 计划侧 scope/constraints 约束。
 - 不读取/不修改用户任何 agy 配置文件。
 
 ## 10. 测试（pytest，全部不依赖真实 agy）
@@ -207,7 +205,7 @@ timeout 解析支持 `Ns/Nm/Nh`（`90s`/`30m`/`1h`），非法值 exit 64。
 
 ## 11. 真实冒烟（scripts/smoke.sh，单独交付）
 
-tmp git 仓库 → 计划文件（"创建 hello.txt 内容为 agy-bridge-smoke，验收：test -f hello.txt 且内容正确，然后提交"）→ `run --auto-approve --effort low --timeout 5m` → 轮询 `status` 至 done → `result` 断言 hello.txt 已提交且 contract_ok=true → `feedback` 一轮（"把内容改为 agy-bridge-smoke-2 并 amend 提交"）→ 断言 → `cleanup --purge --delete-branch`。全程 set -euo pipefail，每步 echo。
+tmp git 仓库 → 计划文件（"创建 hello.txt 内容为 agy-bridge-smoke，验收：test -f hello.txt 且内容正确，然后提交"）→ `run --effort low --timeout 5m` → 轮询 `status` 至 done → `result` 断言 hello.txt 已提交且 contract_ok=true → `feedback` 一轮（"把内容改为 agy-bridge-smoke-2 并 amend 提交"）→ 断言 → `cleanup --purge --delete-branch`。全程 set -euo pipefail，每步 echo。
 
 ## 12. 明确不做（v1）
 
@@ -248,12 +246,12 @@ agy-bridge watch <id> [id...] [--cwd P] [--interval 秒, 默认 2] [--timeout �
   }
   ```
   数据优先来自 `result.json`；缺失字段用 meta 兜底，`diff_stat` 缺失给空串。
-- 退出码：全 done → 0；有任何 error/cancelled/interrupted → 1。
+- 退出码：全部作业进入终态即返回 0；作业不存在返回 3；超时返回 124。
 - `--pretty`：紧凑表格（id/state/round/elapsed/contract_ok/summary 截断 60 字符）。
 
 ### 14.4 `run --wait`
 
-`agy-bridge run ... --wait` 在 spawn detached supervisor 后不立即退出，就地进入单 id 的 watcher 等待逻辑。终态后打印与 `watch` 相同的 JSON 对象并遵循相同退出码规则。
+`agy-bridge run ... --wait` 在 spawn detached supervisor 后不立即退出，就地进入单 id 的 watcher 等待逻辑（strict 模式：全部 done 才返回 0，有非 done 终态返回 1）。终态后打印与 `watch` 相同的 JSON 对象。
 
 ### 14.5 退出码表（v1.1 追加）
 

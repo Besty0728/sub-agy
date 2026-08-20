@@ -76,12 +76,13 @@ def watch_jobs(
     interval: float,
     timeout: float | None,
     pretty: bool,
+    strict: bool = False,
 ) -> int:
     """Poll until all jobs are terminal, then print summaries and return an exit code.
 
     Returns:
-        0   if all jobs reached ``done``.
-        1   if any job reached ``error``/``cancelled``/``interrupted``.
+        0   if all jobs reached terminal state (when strict=True, all must reach ``done``).
+        1   if strict=True and any job reached ``error``/``cancelled``/``interrupted``.
         3   immediately if any job id does not exist.
         124 if the timeout expires before all jobs finish (current states printed).
     """
@@ -130,4 +131,6 @@ def watch_jobs(
 
     summaries = [_build_job_summary(project, jid, metas[jid]) for jid in job_ids]
     _print_summaries(summaries, pretty)
-    return _compute_exit_code(summaries)
+    if strict:
+        return _compute_exit_code(summaries)
+    return EXIT_CODES["success"]

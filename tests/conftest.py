@@ -101,7 +101,7 @@ def config_env(tmp_path: Path, fake_agy: Path, monkeypatch: pytest.MonkeyPatch) 
     """Write a config file pointing to fake_agy and set SUB_AGY_CONFIG env var."""
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        f'agy_bin = "{fake_agy}"\ndefault_timeout = "5m"\nauto_approve = true\n',
+        f'agy_bin = "{fake_agy}"\ndefault_timeout = "5m"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))

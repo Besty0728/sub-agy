@@ -50,3 +50,14 @@ def test_load_config_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_config_timeout_seconds() -> None:
     config = Config(default_timeout="2m")
     assert config.timeout_seconds() == 120
+
+
+def test_load_config_ignores_legacy_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "legacy-config.toml"
+    config_path.write_text(
+        'default_model = "gemini-2.5"\nauto_approve = true\nsandbox = false\nunknown_key = 123\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
+    config = load_config()
+    assert config.default_model == "gemini-2.5"

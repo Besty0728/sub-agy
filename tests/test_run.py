@@ -77,7 +77,7 @@ def test_run_concurrency_limit(git_repo: Path, run_bridge, tmp_path: Path) -> No
 
     config_path = tmp_path / "config2.toml"
     config_path.write_text(
-        'agy_bin = "/bin/true"\nmax_concurrent = 3\nauto_approve = true\n',
+        'agy_bin = "/bin/true"\nmax_concurrent = 3\n',
         encoding="utf-8",
     )
     env = {"SUB_AGY_CONFIG": str(config_path)}

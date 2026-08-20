@@ -18,7 +18,6 @@ class Config:
     default_timeout: str = "30m"
     max_concurrent: int = 3
     max_retries: int = 1
-    auto_approve: bool = False
     agy_bin: str = "agy"
 
     def timeout_seconds(self) -> int:
@@ -72,8 +71,6 @@ def load_config(path: Path | None = None) -> Config:
         kwargs["max_concurrent"] = int(data["max_concurrent"])
     if "max_retries" in data:
         kwargs["max_retries"] = int(data["max_retries"])
-    if "auto_approve" in data:
-        kwargs["auto_approve"] = bool(data["auto_approve"])
     if "agy_bin" in data:
         kwargs["agy_bin"] = str(data["agy_bin"])
 

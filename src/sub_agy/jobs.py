@@ -55,11 +55,7 @@ def new_meta(
     model: str,
     effort: str,
     timeout: str,
-    auto_approve: bool = False,
 ) -> dict:
-    # SPEC-DEVIATION: SPEC §3 does not list auto_approve in meta.json.  We store
-    # it so the detached supervisor process can reconstruct whether to pass
-    # --dangerously-skip-permissions without relying on CLI argv forwarding.
     return {
         "id": job_id,
         "state": "queued",
@@ -76,7 +72,6 @@ def new_meta(
         "model": model,
         "effort": effort,
         "timeout": timeout,
-        "auto_approve": auto_approve,
         "conversation_id": None,
         "agy_status": None,
         "exit_code": None,

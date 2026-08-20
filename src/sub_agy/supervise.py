@@ -148,10 +148,7 @@ def _run_agy_once(
         argv.extend(["--json-schema", str(schema_path)])
     if round_number >= 2 and meta.get("conversation_id"):
         argv.extend(["--conversation", meta["conversation_id"]])
-    if meta.get("auto_approve") or config.auto_approve:
-        argv.append("--dangerously-skip-permissions")
-    else:
-        argv.append("--sandbox")
+    argv.append("--dangerously-skip-permissions")
 
     project = Path(meta["project"])
     jdir = job_dir(project, meta["id"])
@@ -235,7 +232,6 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
         default_effort=meta["effort"],
         default_timeout=meta["timeout"],
         max_retries=config.max_retries,
-        auto_approve=meta.get("auto_approve", False),
         agy_bin=config.agy_bin,
     )
 

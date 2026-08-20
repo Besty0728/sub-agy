@@ -129,11 +129,37 @@ def test_watch_mixed_terminal_exit_code(tmp_project: Path) -> None:
     write_meta(tmp_project, err_id, err_meta)
 
     result = _run_watch(tmp_project, done_id, err_id, "--interval", "0.5", "--timeout", "5s")
-    assert result.returncode == 1, result.stderr
+    assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     by_id = {item["job_id"]: item for item in data}
     assert by_id[done_id]["state"] == "done"
     assert by_id[err_id]["state"] == "error"
+
+
+def test_watch_strict_mode_unit(tmp_project: Path) -> None:
+    from sub_agy.watch import watch_jobs
+
+    done_id = "j-u-done"
+    err_id = "j-u-error"
+
+    done_meta = _make_meta(tmp_project, done_id, "done")
+    done_meta["agy_status"] = "SUCCESS"
+    write_meta(tmp_project, done_id, done_meta)
+    result_path(tmp_project, done_id).write_text(
+        json.dumps({"job_id": done_id, "state": "done", "contract_ok": True}),
+        encoding="utf-8",
+    )
+
+    err_meta = _make_meta(tmp_project, err_id, "error")
+    err_meta["agy_status"] = "ERROR"
+    write_meta(tmp_project, err_id, err_meta)
+
+    # Non-strict (default for watch command): all terminal -> 0
+    assert watch_jobs(tmp_project, [done_id, err_id], interval=0.1, timeout=2.0, pretty=False, strict=False) == 0
+    # Strict (used by run --wait): has error -> 1
+    assert watch_jobs(tmp_project, [done_id, err_id], interval=0.1, timeout=2.0, pretty=False, strict=True) == 1
+    # Strict with all done -> 0
+    assert watch_jobs(tmp_project, [done_id], interval=0.1, timeout=2.0, pretty=False, strict=True) == 0
 
 
 def test_watch_pretty_output(tmp_project: Path) -> None:
@@ -188,3 +214,14 @@ def test_run_wait_end_to_end(git_repo: Path, run_bridge) -> None:
     assert data[0]["state"] == "done"
     assert data[0]["contract_ok"] is True
     assert data[0]["summary"] == "run wait ok"
+
+
+def test_run_wait_error_exit_code(git_repo: Path, run_bridge) -> None:
+    env = {"FAKE_AGY_EXIT": "1", "FAKE_AGY_STATUS": "ERROR"}
+    plan = git_repo / "plan.md"
+    plan.write_text("do work fail\n", encoding="utf-8")
+
+    result = run_bridge("run", "--plan", str(plan), "--wait", env=env, check=False)
+    assert result.returncode == 1, result.stderr
+    data = json.loads(result.stdout)
+    assert data[0]["state"] == "error"

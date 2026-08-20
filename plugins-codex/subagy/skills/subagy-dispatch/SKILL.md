@@ -38,10 +38,10 @@ description: |
 ## 派发单个计划
 
 ```bash
-sub-agy run --plan "<plan.md>" --cwd "<project根>" [--model gemini-3.7-flash] [--effort low|medium|high] [--timeout 30m] [--auto-approve] [--no-worktree]
+sub-agy run --plan "<plan.md>" --cwd "<project根>" [--model gemini-3.7-flash] [--effort low|medium|high] [--timeout 30m] [--no-worktree]
 ```
 
-- `--model`、`--effort`、`--timeout`、`--auto-approve`、`--no-worktree` 与 `src/sub_agy/cli.py` 完全一致。
+- `--model`、`--effort`、`--timeout`、`--no-worktree` 与 `src/sub_agy/cli.py` 完全一致。
 - `run` 默认**立即返回** `job_id`，作业在 detached supervisor 里继续执行。
 
 ## 批量派发
@@ -59,7 +59,7 @@ sub-agy watch <job-id> [job-id...] --cwd "<项目根>" --timeout <按任务规�
 - `watch` 会轮询每个作业，直到**全部**进入终态（`done`/`error`/`cancelled`/`interrupted`）。
 - 超时 exit 124，但仍会打印当前状态；此时可重新执行 `sub-agy watch <job-id> --cwd <根>` **续等**（幂等）。
 - 全部终态后，`watch` 输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, diff_stat, result_path, events_path, worktree, branch`。
-- 退出码：全 `done` → 0；有任何 `error`/`cancelled`/`interrupted` → 1。
+- 退出码：全部作业进入终态 → 0；job 不存在 → 3；超时 → 124。
 
 ## watch 返回后的处理
 
