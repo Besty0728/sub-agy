@@ -64,6 +64,7 @@ def new_meta(
         "queued_at": created_at,
         "started_at": None,
         "finished_at": None,
+        "agy_started_at": None,  # §18.1.d
         "round": 1,
         "pid_agy": None,
         "pid_supervisor": None,
@@ -80,13 +81,17 @@ def new_meta(
         "error": None,
         "attempts": 0,
         "recovered_from_transcript": False,
+        "harvested_at": None,  # §18.2
     }
 
 
 def write_meta(project: Path, job_id: str, meta: dict) -> None:
+    """Atomically write meta using a tmp file + os.replace."""
     path = meta_path(project, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp_path = path.parent / f"{path.name}.tmp"
+    tmp_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def read_meta(project: Path, job_id: str) -> dict:
@@ -113,6 +118,26 @@ def _is_running(pid: int | None) -> bool:
         return False
 
 
+def transition(
+    project: Path,
+    job_id: str,
+    expect_states: list[str],
+    updates: dict,
+) -> dict | None:
+    """CAS-style state transition: reread meta under lock, ensure state ∈ expect_states,
+    then merge updates and write back. Return updated meta on success, None on abort."""
+    # Must be called from within queue_lock context by the caller
+    try:
+        meta = read_meta(project, job_id)
+    except FileNotFoundError:
+        return None
+    if meta.get("state") not in expect_states:
+        return None
+    meta.update(updates)
+    write_meta(project, job_id, meta)
+    return meta
+
+
 def reconcile_state(meta: dict) -> dict:
     """Lazily reconcile queued/running jobs whose supervisor has died."""
     state = meta.get("state")
@@ -123,10 +148,40 @@ def reconcile_state(meta: dict) -> dict:
     if finished_at is not None:
         return meta
     if state == "queued" and supervisor_pid is None:
-        # run/feedback spawned the supervisor but has not recorded its pid yet.
+        # run/feedback spawned the supervisor but has not recorded its pid yet;
+        # check for ghost queued jobs waiting too long (§18.1.e)
+        queued_at = meta.get("queued_at") or meta.get("created_at")
+        if queued_at:
+            queued_ts = datetime.fromisoformat(queued_at).timestamp()
+            now_ts = time.time()
+            if now_ts - queued_ts > 60:
+                # Ghost queued job: supervisor never came online
+                meta["state"] = "interrupted"
+                meta["finished_at"] = datetime.now(timezone.utc).isoformat()
+                meta["error"] = "supervisor did not start within 60s"
+                return meta
         return meta
     if supervisor_pid is not None and _is_running(supervisor_pid):
         return meta
+    # Supervisor dead and not finished -> check for existing result.json (§18.1.b)
+    # If result exists for this round, don't overwrite to interrupted
+    try:
+        project = Path(meta.get("project", ""))
+        if project.exists():
+            rpath = result_path(project, meta.get("id", ""))
+            if rpath.exists():
+                result = json.loads(rpath.read_text(encoding="utf-8"))
+                if result.get("round") == meta.get("round"):
+                    # Result exists for this round: adopt its terminal state
+                    # instead of clobbering to interrupted or staying running
+                    rstate = result.get("state")
+                    if rstate in ("done", "error"):
+                        meta["state"] = rstate
+                        if meta.get("finished_at") is None:
+                            meta["finished_at"] = datetime.now(timezone.utc).isoformat()
+                    return meta
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
     # Supervisor dead and not finished -> interrupted
     meta["state"] = "interrupted"
     meta["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -181,12 +236,22 @@ def elapsed_seconds(meta: dict) -> float | None:
 
 
 def latest_step_summary(project: Path, job_id: str) -> str | None:
-    """Return the latest assistant/result summary from events.ndjson."""
+    """Return the latest assistant/result summary from events.ndjson (tail 64KB).
+
+    §18.1.p: Use tail read instead of loading entire file.
+    """
     path = events_path(project, job_id)
     if not path.exists():
         return None
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        file_size = path.stat().st_size
+        # Read last 64KB (or entire file if smaller)
+        read_size = min(file_size, 64 * 1024)
+        with path.open("rb") as fh:
+            if file_size > read_size:
+                fh.seek(file_size - read_size)
+            content = fh.read().decode("utf-8", errors="replace")
+        lines = content.splitlines()
     except OSError:
         return None
     summary = None

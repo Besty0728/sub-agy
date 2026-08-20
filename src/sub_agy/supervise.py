@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import signal
@@ -30,9 +31,6 @@ def _brain_dir() -> Path:
     return Path.home() / ".gemini" / "antigravity-cli" / "brain"
 
 
-_BRAIN_DIR = _brain_dir()
-
-
 def _write_event(project: Path, job_id: str, event: dict) -> None:
     path = events_path(project, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,33 +42,67 @@ def _write_round_separator(project: Path, job_id: str, round_number: int) -> Non
     _write_event(project, job_id, {"type": "round", "n": round_number})
 
 
-def _find_transcript_response(start_time: float) -> str | None:
-    """Fallback: find latest transcript.jsonl under brain dir and read last assistant text."""
+def _find_transcript_response(
+    start_time: float, meta: dict, project: Path
+) -> str | None:
+    """Fallback: find transcript.jsonl under brain dir with strict validation (§18.1.i).
+
+    Only recover if exactly one brain directory's mtime falls in [started_at, now) and
+    its UUID is not used by any other job in this project.
+    """
     brain_dir = _brain_dir()
     if not brain_dir.exists():
         return None
-    best_path: Path | None = None
-    best_mtime = 0.0
-    for entry in brain_dir.iterdir():
-        if not entry.is_dir():
-            continue
-        transcript = entry / ".system_generated" / "logs" / "transcript.jsonl"
-        if not transcript.exists():
-            continue
-        mtime = transcript.stat().st_mtime
-        # Within job start window (allow some slack)
-        if mtime < start_time - 30:
-            continue
-        if mtime > best_mtime:
-            best_mtime = mtime
-            best_path = transcript
-    if best_path is None:
+
+    started_at = meta.get("agy_started_at")
+    if not started_at:
         return None
+
+    try:
+        start_ts = datetime.fromisoformat(started_at).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+    now = time.time()
+
+    # Find candidate brain directories with mtime in [started_at - 60s, now]
+    # (allowing some tolerance for system clock skew, I/O delays, etc.)
+    candidates: list[tuple[Path, str]] = []
+    if brain_dir.exists():
+        tolerance = 60  # Allow 60s before started_at for system clock skew
+        for entry in brain_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            transcript = entry / ".system_generated" / "logs" / "transcript.jsonl"
+            if not transcript.exists():
+                continue
+            mtime = transcript.stat().st_mtime
+            # Within job start window with tolerance
+            if mtime < start_ts - tolerance or mtime > now:
+                continue
+            candidates.append((transcript, entry.name))  # entry.name is uuid
+
+    if len(candidates) != 1:
+        # Zero or multiple candidates -> cannot uniquely associate
+        return None
+
+    best_path, uuid = candidates[0]
+
+    # Verify uuid is not used by any other job in this project (§18.1.i)
+    from .jobs import list_jobs
+    for other_meta in list_jobs(project):
+        if other_meta.get("id") == meta.get("id"):
+            continue
+        # Only check if other job has a conversation_id (not None)
+        if other_meta.get("conversation_id") and other_meta.get("conversation_id") == uuid:
+            # UUID used by another job -> cannot recover
+            return None
 
     try:
         lines = best_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
+
     last_text: str | None = None
     for line in lines:
         line = line.strip()
@@ -170,6 +202,9 @@ def _run_agy_once(
         cwd=str(worktree_or_cwd),
     )
 
+    # Immediately record agy process ownership (§18.1.d)
+    update_meta(project, meta["id"], pid_agy=proc.pid, agy_started_at=datetime.now(timezone.utc).isoformat())
+
     events: list[dict] = []
     events_lock = threading.Lock()
 
@@ -211,6 +246,10 @@ def _run_agy_once(
         exit_code = None
 
     reader_thread.join(timeout=5)
+
+    # Clear agy process ownership after exit (§18.1.d)
+    update_meta(project, meta["id"], pid_agy=None)
+
     return proc, events, exit_code
 
 
@@ -228,13 +267,12 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     if not schema_path.exists():
         schema_path = None
     config = load_config()
-    config = Config(
-        **{
-            **config.__dict__,
-            "default_model": meta["model"],
-            "default_effort": meta["effort"],
-            "default_timeout": meta["timeout"],
-        }
+    # §18.1.q: Use dataclasses.replace for Config overrides
+    config = dataclasses.replace(
+        config,
+        default_model=meta["model"],
+        default_effort=meta["effort"],
+        default_timeout=meta["timeout"],
     )
 
     cancelled = False
@@ -266,6 +304,7 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
             max_concurrent=config.max_concurrent,
             timeout=parse_timeout(config.queue_timeout),
             should_abort=lambda: cancelled,
+            expect_round=round_number,  # §18.1.f: claim validation
             on_wait=lambda running, ahead: _write_event(
                 project,
                 job_id,
@@ -281,11 +320,7 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
         return
 
     if slot_meta is None:
-        # Cancelled while queued; never started agy.
-        meta = read_meta(project, job_id)
-        meta["state"] = "cancelled"
-        meta["finished_at"] = datetime.now(timezone.utc).isoformat()
-        write_meta(project, job_id, meta)
+        # Cancelled while queued, or claim validation failed (§18.1.f); exit without changing meta
         return
 
     meta = slot_meta
@@ -296,7 +331,9 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
 
     timeout_seconds = parse_timeout(meta["timeout"])
     grace = int(os.environ.get("_SUB_AGY_GRACE_SECONDS", "60"))
-    wall_clock = timeout_seconds + grace
+    max_attempts = max(1, config.max_retries + 1)
+    # §18.1.h: Total budget = timeout_seconds * max_attempts + grace
+    wall_clock = timeout_seconds * max_attempts + grace
     start_time = time.time()
 
     final_event: dict | None = None
@@ -305,13 +342,18 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     contract_note: str | None = None
 
     attempts = 0
-    max_attempts = max(1, config.max_retries + 1)
 
     while attempts < max_attempts:
-        attempts += 1
-        remaining = timeout_seconds + grace
+        # Check wall-clock budget at loop top (§18.1.h)
+        remaining = wall_clock - (time.time() - start_time)
         if remaining <= 0:
             break
+        if cancelled:
+            break
+
+        attempts += 1
+        # §18.1.h: Single attempt timeout = min(timeout_seconds + grace, remaining)
+        attempt_timeout = min(timeout_seconds + grace, remaining)
         proc, events, exit_code = _run_agy_once(
             meta,
             prompt,
@@ -320,11 +362,11 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
             config,
             round_number,
             drop_schema,
-            timeout=remaining,
+            timeout=attempt_timeout,
         )
         if proc is None:
             break
-        meta = update_meta(project, job_id, pid_agy=proc.pid, attempts=attempts)
+        meta = update_meta(project, job_id, attempts=attempts)
 
         if exit_code is None:
             # Timed out; loop will retry if attempts remain.
@@ -379,16 +421,19 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
         num_turns = final_event.get("num_turns", 0)
         usage = final_event.get("usage")
 
-    # stdout bug fallback
+    # stdout bug fallback with strict validation (§18.1.i)
     if (not final_event or not response_text) and not cancelled:
-        transcript_response = _find_transcript_response(start_time)
+        # Reread meta to get latest agy_started_at set by _run_agy_once
+        current_meta = read_meta(project, job_id)
+        transcript_response = _find_transcript_response(start_time, current_meta, project)
         if transcript_response:
             response_text = transcript_response
             recovered = True
+            agy_status = "RECOVERED"  # Mark as recovered (§18.1.i)
             if final_event is None:
                 final_event = {"type": "result", "response": response_text}
-                agy_status = agy_status or "SUCCESS"
 
+    # Determine final state
     if final_event is None and not cancelled:
         # No result event and no transcript fallback
         meta["state"] = "error"
@@ -409,12 +454,9 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     meta["agy_status"] = agy_status
     meta["conversation_id"] = conversation_id
     meta["recovered_from_transcript"] = recovered or meta.get("recovered_from_transcript", False)
-    write_meta(project, job_id, meta)
 
-    if meta["state"] == "error":
-        return
-
-    # Build result.json
+    # §18.1.c: Write result.json first, then flip meta to terminal state
+    # Build result for both done and error states
     summary = response_text[:500]
     contract_ok = True
     if structured_output:
@@ -458,5 +500,10 @@ def supervise_round(job_id: str, round_number: int, project: Path | None = None)
     if contract_note:
         result["contract_note"] = contract_note
 
-    result_file = result_path(project, job_id)
-    result_file.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # Write result.json before updating meta to terminal state (§18.1.c)
+    if meta["state"] in ("done", "error"):
+        result_file = result_path(project, job_id)
+        result_file.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # Finally, write meta with terminal state (§18.1.c)
+    write_meta(project, job_id, meta)

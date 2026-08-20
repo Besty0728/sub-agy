@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -70,16 +72,20 @@ def _write_supervisor_stderr(project: Path, job_id: str) -> Path:
 
 def cmd_run(args) -> None:
     config = load_config()
+    # §18.1.q: Use dataclasses.replace for Config overrides
+    overrides = {}
     if args.model:
-        config = Config(**{**config.__dict__, "default_model": args.model})
+        overrides["default_model"] = args.model
     if args.effort:
-        config = Config(**{**config.__dict__, "default_effort": args.effort})
+        overrides["default_effort"] = args.effort
     if args.timeout:
         try:
             parse_timeout(args.timeout)
         except ValueError as exc:
             _json_error(str(exc), EXIT_CODES["usage"])
-        config = Config(**{**config.__dict__, "default_timeout": args.timeout})
+        overrides["default_timeout"] = args.timeout
+    if overrides:
+        config = dataclasses.replace(config, **overrides)
 
     project = _resolve_project(args)
 
@@ -126,6 +132,24 @@ def cmd_run(args) -> None:
 
     worktree_or_cwd = worktree if worktree else project
     prompt = assemble_prompt(plan, str(worktree_or_cwd), round_number=1)
+
+    # §18.1.m: Check prompt size limit (200KB)
+    if len(prompt.encode('utf-8')) > 200 * 1024:
+        # Rollback worktree and branch
+        if worktree:
+            try:
+                remove_worktree(project, worktree, force=True)
+            except Exception:
+                pass
+            if branch:
+                try:
+                    delete_branch(project, branch)
+                except Exception:
+                    pass
+        _json_error(
+            f"prompt exceeds 200KB limit ({len(prompt.encode('utf-8'))} bytes)",
+            EXIT_CODES["usage"],
+        )
 
     schema_text = json.dumps(RESULT_SCHEMA, indent=2)
     write_plan_files(jdir, plan, prompt, schema_text)
@@ -185,7 +209,13 @@ def cmd_run(args) -> None:
     }
 
     if args.wait:
-        sys.exit(watch_jobs(project, [job_id], interval=2.0, timeout=3600.0, pretty=args.pretty, strict=True))
+        # §18.1.j: Default wait timeout = queue_timeout + timeout * max_attempts + grace
+        queue_timeout_sec = parse_timeout(config.queue_timeout)
+        run_timeout_sec = parse_timeout(meta["timeout"])
+        max_attempts = max(1, config.max_retries + 1)
+        grace_sec = int(os.environ.get("_SUB_AGY_GRACE_SECONDS", "60"))
+        wait_timeout = queue_timeout_sec + run_timeout_sec * max_attempts + grace_sec
+        sys.exit(watch_jobs(project, [job_id], interval=2.0, timeout=wait_timeout, pretty=args.pretty, strict=True))
 
     print(_fmt_json(output, args.pretty))
     sys.exit(EXIT_CODES["success"])
@@ -206,18 +236,28 @@ def cmd_status(args) -> None:
     project = _resolve_project(args)
     if args.all:
         jobs = list_jobs(project, state_filter=args.state)
-        data = [
-            {
+        # §18.1.p: Single snapshot of all jobs for queue_position calculation
+        queued_jobs = [m for m in jobs if m.get("state") == "queued"]
+
+        data = []
+        for m in jobs:
+            # Calculate queue_position from snapshot (§18.1.p)
+            if m.get("state") == "queued":
+                my_key = (m.get("queued_at") or m.get("created_at") or "", m.get("id") or "")
+                pos = sum(1 for jm in queued_jobs if (jm.get("queued_at") or jm.get("created_at") or "", jm.get("id") or "") < my_key) + 1
+            else:
+                pos = None
+
+            data.append({
                 "id": m["id"],
                 "state": m["state"],
                 "round": m.get("round"),
-                "queue_position": queue_position(project, m["id"]),
+                "queue_position": pos,
                 "elapsed": elapsed_seconds(m),
                 "tokens": _read_job_tokens(project, m["id"]),
                 "summary": latest_step_summary(project, m["id"]),
-            }
-            for m in jobs
-        ]
+            })
+
         if args.pretty:
             print(
                 f"{'id':<30} {'state':<12} {'round':>5} "
@@ -278,6 +318,10 @@ def cmd_result(args) -> None:
         result = json.loads(rpath.read_text(encoding="utf-8"))
     else:
         result = {"error": "no result.json available", "state": meta["state"]}
+
+    # §18.2: Mark as harvested (write timestamp) if state is done/error and harvested_at not yet set
+    if meta.get("state") in ("done", "error") and meta.get("harvested_at") is None:
+        meta = update_meta(project, args.id, harvested_at=datetime.now(timezone.utc).isoformat())
 
     if args.events:
         result["events_path"] = str(job_dir(project, args.id) / "events.ndjson")
@@ -347,6 +391,8 @@ def cmd_feedback(args) -> None:
     prompt_path = job_dir(project, args.id) / "prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
 
+    # §18.1.l: Clear residual fields when requeuing for feedback
+    timeout_val = args.timeout if hasattr(args, "timeout") and args.timeout else meta.get("timeout")
     meta = update_meta(
         project,
         args.id,
@@ -355,6 +401,13 @@ def cmd_feedback(args) -> None:
         queued_at=datetime.now(timezone.utc).isoformat(),
         finished_at=None,
         pid_supervisor=None,
+        error=None,
+        agy_status=None,
+        exit_code=None,
+        pid_agy=None,
+        recovered_from_transcript=None,
+        timeout=timeout_val,
+        harvested_at=None,  # Reset for next round (§18.2)
     )
 
     stderr_log = _write_supervisor_stderr(project, args.id)
@@ -394,6 +447,8 @@ def cmd_feedback(args) -> None:
 
 
 def cmd_cancel(args) -> None:
+    from .jobs import transition
+
     project = _resolve_project(args)
     if not args.id:
         _json_error("job id required", EXIT_CODES["usage"])
@@ -420,12 +475,28 @@ def cmd_cancel(args) -> None:
             except (ProcessLookupError, PermissionError, OSError):
                 pass
 
-    if killed:
-        meta["state"] = "cancelled"
-        meta["finished_at"] = datetime.now(timezone.utc).isoformat()
-        write_meta(project, args.id, meta)
+    # §18.1.g: Use transition() to atomically change only non-terminal jobs
+    with queue_lock(project):
+        updated = transition(
+            project,
+            args.id,
+            expect_states=["queued", "running"],
+            updates={
+                "state": "cancelled",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if updated is None:
+            # Already terminal or not found; report actual state
+            try:
+                current = read_meta(project, args.id)
+                state = current.get("state", "unknown")
+            except FileNotFoundError:
+                state = "not_found"
+        else:
+            state = "cancelled"
 
-    print(_fmt_json({"job_id": args.id, "state": "cancelled"}, args.pretty))
+    print(_fmt_json({"job_id": args.id, "state": state}, args.pretty))
 
 
 def _pid_alive(pid: int) -> bool:
@@ -443,9 +514,11 @@ def cmd_list(args) -> None:
         print(f"{'id':<30} {'state':<12} {'round':>5} {'elapsed':>10}")
         for m in jobs:
             elapsed = elapsed_seconds(m)
+            # §18.1.k: Format elapsed as '-' for queued jobs (elapsed=None)
+            elapsed_str = fmt_elapsed(elapsed) if elapsed is not None else '-'
             print(
                 f"{m['id']:<30} {m['state']:<12} {m.get('round', 1):>5} "
-                f"{elapsed if elapsed is not None else '-':>10.1f}"
+                f"{elapsed_str:>10}"
             )
     else:
         print(_fmt_json([{k: m[k] for k in ("id", "state", "round")} | {"elapsed": elapsed_seconds(m)} for m in jobs], False))
@@ -484,6 +557,7 @@ def cmd_doctor(args) -> None:
     config = load_config()
     agy_path = agy_bin_path(config)
 
+    import re
     agy_version: str | None = None
     try:
         result = subprocess.run(
@@ -496,13 +570,18 @@ def cmd_doctor(args) -> None:
         if result.returncode != 0:
             issues.append("agy --version failed")
         else:
-            agy_version = result.stdout.strip().split()[0]
-            try:
-                parts = agy_version.split(".")
-                if len(parts) >= 3 and (int(parts[0]), int(parts[1]), int(parts[2])) < (1, 1, 8):
-                    issues.append(f"agy version {agy_version} < 1.1.8")
-            except ValueError:
-                pass
+            # §18.1.n: Use regex to find version
+            version_match = re.search(r"(\d+\.\d+\.\d+)", result.stdout)
+            if version_match:
+                agy_version = version_match.group(1)
+                try:
+                    parts = agy_version.split(".")
+                    if len(parts) >= 3 and (int(parts[0]), int(parts[1]), int(parts[2])) < (1, 1, 8):
+                        issues.append(f"agy version {agy_version} < 1.1.8")
+                except ValueError:
+                    pass
+            else:
+                issues.append("could not parse agy version")
     except FileNotFoundError:
         issues.append("agy not found on PATH")
     except subprocess.TimeoutExpired:
@@ -582,6 +661,59 @@ def cmd_quota(args) -> None:
 def cmd_supervise(args) -> None:
     project = _resolve_project(args)
     supervise_round(args.id, args.round, project)
+
+
+def cmd_pending(args) -> None:
+    """§18.2: List jobs pending harvest (done/error/interrupted with harvested_at=null)."""
+    project = _resolve_project(args)
+    jobs = list_jobs(project)
+
+    pending = []
+    for meta in jobs:
+        # Reconcile state (lazy interrupted detection)
+        original_state = meta.get("state")
+        meta = reconcile_state(meta)
+        if meta.get("state") != original_state:
+            write_meta(project, meta["id"], meta)
+
+        # Check: terminal state, has harvested_at key, and it's null
+        if meta.get("state") in ("done", "error", "interrupted"):
+            # "has key" means it was explicitly set (new jobs have harvested_at: null)
+            # Old jobs without the key are considered already harvested
+            if "harvested_at" in meta and meta.get("harvested_at") is None:
+                # Fetch summary from result if available
+                rpath = result_path(project, meta["id"])
+                summary = ""
+                if rpath.exists():
+                    try:
+                        result = json.loads(rpath.read_text(encoding="utf-8"))
+                        summary = (result.get("summary") or "")[:120]
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+                pending.append({
+                    "job_id": meta.get("id"),
+                    "state": meta.get("state"),
+                    "round": meta.get("round"),
+                    "finished_at": meta.get("finished_at"),
+                    "summary": summary,
+                })
+
+    if args.pretty:
+        print(
+            f"{'job_id':<30} {'state':<12} {'round':>5} {'finished_at':<26} {'summary'}"
+        )
+        for item in pending:
+            finished = item.get("finished_at") or "-"
+            summary = item.get("summary", "")[:60]
+            print(
+                f"{item['job_id']:<30} {item['state']:<12} {item.get('round', 1):>5} "
+                f"{finished:<26} {summary}"
+            )
+    else:
+        print(json.dumps(pending, indent=2, ensure_ascii=False))
+
+    sys.exit(EXIT_CODES["success"])
 
 
 def build_parser() -> None:
@@ -674,6 +806,9 @@ def build_parser() -> None:
     sup_p.add_argument("--round", type=int, default=1)
     sup_p.set_defaults(func=cmd_supervise)
 
+    pending_p = sub.add_parser("pending", help="list jobs pending harvest (§18.2)")
+    pending_p.set_defaults(func=cmd_pending)
+
     return parser
 
 
@@ -688,6 +823,7 @@ _SUBCOMMANDS = {
     "cleanup",
     "doctor",
     "quota",
+    "pending",
     "_supervise",
 }
 

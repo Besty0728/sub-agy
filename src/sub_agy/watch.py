@@ -115,7 +115,15 @@ def watch_jobs(
     while True:
         all_terminal = True
         for job_id in job_ids:
-            meta = read_meta(project, job_id)
+            # §18.1.k: Handle meta file disappearance
+            try:
+                meta = read_meta(project, job_id)
+            except FileNotFoundError:
+                # Meta file was deleted; mark as missing (terminal state)
+                meta = {"id": job_id, "state": "missing"}
+                metas[job_id] = meta
+                continue
+
             original_state = meta.get("state")
             meta = reconcile_state(meta)
             if meta.get("state") == "interrupted" and original_state != "interrupted":

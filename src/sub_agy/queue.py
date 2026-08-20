@@ -91,6 +91,7 @@ def acquire_slot(
     timeout: float | None = None,
     should_abort: Callable[[], bool] | None = None,
     on_wait: Callable[[int, int], None] | None = None,
+    expect_round: int | None = None,
 ) -> dict | None:
     """Block until a run slot frees up, then atomically mark the job ``running``.
 
@@ -98,8 +99,9 @@ def acquire_slot(
     ``max_concurrent`` jobs are running *and* no earlier-queued job is still
     entitled to one of the free slots.
 
-    Returns the updated meta, ``None`` if ``should_abort`` fired first, and
-    raises :class:`QueueTimeout` if ``timeout`` seconds elapse while waiting.
+    Returns the updated meta, ``None`` if ``should_abort`` fired first or claim
+    validation fails (§18.1.f), and raises :class:`QueueTimeout` if ``timeout``
+    seconds elapse while waiting.
     """
     deadline = time.time() + timeout if timeout is not None else None
     announced = False
@@ -109,6 +111,20 @@ def acquire_slot(
             return None
 
         with queue_lock(project):
+            # Claim validation: reread meta, check state and round (§18.1.f)
+            try:
+                current_meta = read_meta(project, job_id)
+            except FileNotFoundError:
+                return None
+
+            if current_meta.get("state") != "queued":
+                # Job already transitioned (by feedback/cancel) -> abort
+                return None
+
+            if expect_round is not None and current_meta.get("round") != expect_round:
+                # Round mismatch (double feedback) -> abort
+                return None
+
             running = count_running(project)
             free = max_concurrent - running
             if free > 0 and queued_ahead(project, job_id) < free:

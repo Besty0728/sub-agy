@@ -1,4 +1,4 @@
-# sub-agy 引擎规格（v1.4）
+# sub-agy 引擎规格（v1.5）
 
 > **rename 注记**：本项目自 v1.4 起从 `agy-bridge` 全局更名为 `sub-agy`。§1–§16 为 v1–v1.3 的设计史，保留原文中的旧名（`agy-bridge`、`agybridge`、`agy_bridge`、`AGY_BRIDGE_HOME`、`.agybridge`）以反映当时状态；当前实现的包名、CLI、插件与目录结构请见 §17。git 分支前缀 `agy/<job_id>` 作为执行体品牌继续保留。
 
@@ -513,3 +513,130 @@ v1.4 仅做项目级重命名，功能与 v1.3 完全一致。映射如下：
 - 作业 id 前缀 `j-`。
 - 致谢/参考章节里的外部仓库名（`antigravity-plugin-cc`、`agy-mcp` 等）。
 - §1–§16 历史正文。
+
+## 18. v1.5：正确性硬化、收割标记、三端触发强化与 Kimi 接入
+
+> 2026-08-21 全量代码审查（93 测试全绿但发现 5 高危/9 中危）后的修复与扩展规格。实现顺序：§18.1 → §18.2 → 其余并行。
+
+### 18.1 正确性硬化（src/sub_agy）
+
+**a) meta 原子写**：`jobs.write_meta` 改为同目录临时文件 + `os.replace`。禁止任何直接覆写。
+
+**b) CAS 状态迁移 helper**：`jobs.py` 新增 `transition(project, job_id, expect_states, updates) -> meta|None`——在 `queue.lock` 的 flock 内重读 meta，`state ∈ expect_states` 才合并写回，否则返回 None（调用方据此放弃）。以下写路径全部收敛到它：supervisor 终态落盘、`cancel`、惰性和解写 `interrupted`、`acquire_slot` 的 claim、`feedback` 重排队。惰性和解额外规则：锁内重读后若已是终态，或本轮 result.json 已存在，**绝不**覆写为 `interrupted`。
+
+**c) 终态不变式**：meta 进入终态 ⇒ 本轮 result.json 已就绪。即：
+- `done` **与 `error`** 都写 result.json（error 至少含 `job_id/state/round/error/attempts/response_text 摘要`），**先写 result.json，最后一步才翻 meta 终态**。
+- result.json 增加顶层 `round` 校验义务：`watch`/`result` 读到 `result.round != meta.round` 时视为无验收单（summary 空、`contract_ok=false`、输出标 `stale_result=true`）。
+- `watch` 若见终态但 result.json 缺失/round 不匹配，额外多等最多 2×interval 再定稿（兼容旧版作业）。
+
+**d) 进程所有权**：`_run_agy_once` 在 `Popen` 后**立即** `update_meta(pid_agy=..., agy_started_at=now)`，`wait()` 返回后清 `pid_agy=None`。修复"cancel 孤儿清理拿到尸体 pid"。
+
+**e) 幽灵 queued TTL**：`reconcile_state` 对 `state=queued 且 pid_supervisor=None 且 now-queued_at > 60s` 的作业落 `interrupted`（此前该形态永久堵死 FIFO）。
+
+**f) 槽位 claim 校验**：`acquire_slot` 锁内 claim 前重读自身 meta：`state != "queued"` 或 `round != 本 supervisor 的 round` → 返回放弃信号，supervisor 直接退出且不再改 meta。等待循环中发现自身已被改为终态 → 同样退出。这封死"双重 feedback 拉起两个 agy"。
+
+**g) cancel 如实化**：`cmd_cancel` 改为锁内重读、仅在非终态时落 `cancelled`；没杀到任何进程且已终态时如实输出当前 state（不再谎报 cancelled）。
+
+**h) 重试墙钟预算**：总预算 `wall_clock = timeout_seconds × max_attempts + grace`（`max_attempts = max_retries + 1`），预算只算一次；每轮 `remaining = wall_clock - (now - start_time)`，`remaining <= 0` 不再重试；单次尝试的进程等待上限为 `min(timeout_seconds + grace, remaining)`。这样"超时 → 杀进程组 → 换新进程重试"的 v1 语义保留（`max_retries` 不失效），同时消除旧实现预算不递减导致的无限追加。删除死变量。cancel 检查加在循环顶部与每次 spawn 之前（封死"超时攻杀窗口内 SIGTERM 仍再 spawn 一轮"）。
+
+**i) transcript 兜底收紧**：仅当能把 brain 目录唯一关联到本作业时才恢复——候选 = mtime ∈ [started_at, now] 的 `<uuid>` 目录，且 uuid 不属于本项目任何其他作业的 `conversation_id`；候选恰好一个 → 恢复，`agy_status="RECOVERED"`、`contract_ok=false`、state 可为 done；候选为零或多个 → 不恢复，state=error。**任何情况下不再伪造 `SUCCESS`**。
+
+**j) `run --wait` 超时派生**：默认等待上限从硬编码 3600s 改为 `queue_timeout + timeout × max_attempts + grace`。
+
+**k) 崩溃修复**：`list --pretty` 对 `elapsed=None`（queued 作业）先格式化为 `-` 再对齐（现为必崩 ValueError）；`watch` 轮询遇 meta 文件被并发 cleanup 删除 → 该作业标 `state="missing"` 视为终态，不崩。
+
+**l) feedback 清残留**：重排队时重置 `error/agy_status/exit_code/pid_agy/recovered_from_transcript/finished_at` 为 null；`--timeout` 旗标生效（写入 meta.timeout）。
+
+**m) prompt 超限回滚**：>200KB 时 exit 64（而非 1），且回滚已创建的 worktree 与分支。
+
+**n) doctor 版本解析**：用正则 `(\d+\.\d+\.\d+)` 搜索 stdout，找不到降级为警告，不 IndexError。
+
+**o) attempts 记账**：统一为自增，删除"累计值随即被本轮值覆盖"的双重记账。
+
+**p) 只读路径快照化**：`acquire_slot` 锁内一次 `list_jobs` 快照复用（现为 3 次全扫）；`status --all` 一次快照算全部 `queue_position`（现为 O(n²)）；`latest_step_summary` 改 tail 读（最后 64KB）。
+
+**q) 清理**：删除死代码（`_BRAIN_DIR`、未用 imports、`build_parser -> None` 错注解、恒真分支）；`Config` 覆写用 `dataclasses.replace`。
+
+**回归测试**（新增，全部不依赖真实 agy）：done 前 result.json 必已存在；error 轮写 result.json 且 round 匹配校验生效；`list --pretty` 含 queued 作业不崩；queued TTL 和解；claim 校验拒绝非 queued；cancel 终态不覆写；feedback 字段重置；transcript 多候选拒绝恢复。
+
+### 18.2 收割标记与 `pending` 子命令
+
+- meta 新增 `harvested_at`：`run` 创建时显式写 `null`。**旧 meta 无此键 → 永远视为已收割**（升级不惊扰历史作业）。
+- `result <id>` 成功输出（exit 0）且 state ∈ {done,error} → 若该键存在且为 null，写入当前 UTC 时间。
+- `feedback` 受理 → 重置为 null（新一轮需重新收割）。
+- 新子命令 `pending [--cwd P] [--pretty]`：reconcile 后筛 `state ∈ {done,error,interrupted}` 且含键且为 null 的作业，输出 JSON 数组 `[{job_id,state,round,finished_at,summary}]`（summary 取 round 匹配的 result.json 前 120 字符，缺省空串）。恒 exit 0（用法错误 64 除外）。空结果输出 `[]`。
+
+### 18.3 Stop hook 兜底（Claude Code 与 Kimi 同语义）
+
+watcher 唤醒是主通道；本 hook 只兜"通知丢失"（会话重启/压缩/用户切走）的场景。
+
+- **Claude 插件**：`plugins/subagy/hooks/hooks.json` 注册 Stop hook → `scripts/stop-pending-check.sh`（timeout 10s）。脚本契约：读 stdin JSON；`stop_hook_active=true` → exit 0（防循环）；工作目录无 `.subagy/jobs` → exit 0；`ab pending` 输出非 `[]` → stdout 输出 `{"decision":"block","reason":"sub-agy 作业 <ids> 已完成未收割，请按 /subagy:harvest 流程收割"}`；否则 exit 0。任何内部错误 → exit 0（fail-open）。
+- **Kimi 插件**：同脚本逻辑，但 Kimi hook 的 cwd 是 plugin 根，session cwd 从 stdin payload 的 `cwd` 字段取；阻断方式为 stderr 写 reason + exit 2。防循环依赖 harvested 标记（收割即 `result`，写标记后 hook 自然停火）。
+
+### 18.4 触发灵敏度修缮（Claude 插件）
+
+- `quota.md` 补 `description` frontmatter（**现状缺失导致该命令不出现在技能列表**）；全部 commands 的 description 增补中英触发关键词（派发/dispatch/delegate/agy/antigravity/后台执行/收割/harvest/验收/额度/quota/用量/诊断/doctor…）。
+- `harvest.md` 与 `feedback.md`：**自动 feedback 打回后，必须立即为该 job 重挂一个单 id 后台 watcher**（与 dispatch 相同命令与 timeout 规则）。此前打回后第二轮完成无人监听，自动回路断裂。
+- `harvest.md`：验收通过 → 建议合并；当用户确认已合并、或 `git branch --merged` 显示 `agy/<id>` 已并入当前分支 → 自动 `cleanup <id> --delete-branch`（既定用户偏好）。
+
+### 18.5 Codex：git 市场直连与文档刷新
+
+- Codex 桌面端 marketplace 支持 `source_type = "git"`（二进制 `MarketplaceSourceType` 枚举 {git, local}，含 "expected a Git URL" 校验与可选 `refs` 字段）。README 的 Codex 安装节改为免 clone：
+
+  ```toml
+  [marketplaces.subagy]
+  source_type = "git"
+  source = "https://github.com/Besty0728/sub-agy"
+  ```
+
+  本地 clone + `source_type = "local"` 保留为备选（离线/开发场景）。
+- `codex/AGENTS.md.snippet` 从 agy-bridge 旧文案全量刷新：sub-agy 命名、`.subagy/` 路径、`SUB_AGY_HOME`、删除已不存在的 `--auto-approve`（现实为恒定 `--dangerously-skip-permissions`）、补 `--strict` 与排队语义。
+- `plugins-codex/.../subagy-runtime/SKILL.md`：修 "agl-bridge" 笔误；watch 行补 `--strict`；补排队语义（`queued_at` FIFO、`queue_position`、`queue_timeout`、exit 5 保留不产出）。
+- `plugins-codex/.../subagy-dispatch/SKILL.md`：批量派发后**按派发顺序逐 job** `watch <id> --strict` 增量收割（不再一个 barrier watch 等全部）；超时 124 后续等幂等。
+
+### 18.6 Kimi Code CLI 接入（v1.5 新增）
+
+**形态**：仓库根放 `.kimi-plugin/plugin.json`（Kimi 以仓库根为 plugin 根），支持 `/plugins install https://github.com/Besty0728/sub-agy` 直装（有 release 装 release，否则默认分支；`/tree/<branch>` 可钉版本）。实际内容放 `plugins-kimi/subagy/` 下，manifest 用 `./` 路径引用（Kimi 要求所有路径位于 plugin 根内，仓库根即根，合法）。
+
+manifest 要点：
+
+```json
+{
+  "name": "subagy",
+  "version": "0.2.0",
+  "description": "把 Antigravity CLI (agy) 变成 Kimi Code 的异步代码执行后端：派发计划、后台执行、结构化验收。",
+  "skills": "./plugins-kimi/subagy/skills/",
+  "agents": "./plugins-kimi/subagy/agents/",
+  "commands": "./plugins-kimi/subagy/commands/",
+  "hooks": [
+    {"event": "Stop", "command": "bash ./plugins-kimi/subagy/hooks/stop-pending-check.sh", "timeout": 10}
+  ],
+  "interface": {"displayName": "sub-agy", "shortDescription": "把 agy 变成 Kimi Code 的异步代码执行后端"}
+}
+```
+
+**目录**：
+
+```
+plugins-kimi/subagy/
+├── commands/   # dispatch.md harvest.md status.md feedback.md quota.md doctor.md
+├── skills/subagy-runtime/SKILL.md   # name+description 必填（Kimi 硬性要求）
+├── agents/subagy-watcher.md
+└── hooks/stop-pending-check.sh
+```
+
+**AgentTeam 等效机制（核心）**：Kimi 文档确认 subagent 支持后台运行且"完成后结果自动回到 main agent"，并有 `AgentSwarm` 并行派发。因此：
+
+- `dispatch` 命令流程：逐个 `sub-agy run` → 输出作业卡片（分档判定表照抄 Claude 版）→ **每 job 一个后台 `subagy-watcher` subagent**（多 job 用 AgentSwarm 并行），谁先返回先收割。
+- `agents/subagy-watcher.md`：`tools: [Bash, Read]`；正文契约——执行 `sub-agy watch <job-id> --strict --cwd <project> --timeout <t>` 阻塞等待；超时 124 就原命令续等（幂等），最多续 2 次；最后一条消息必须是完整交付：watch 输出的 JSON 原文 + 一行判定（state/contract_ok/tests_passed）。
+- main agent 收到 watcher 返回后，对**那一个** job 走 harvest 规则（与 Claude 端同构：不通过自动 feedback 并**重挂新的后台 watcher subagent**；通过只建议合并；用户确认合并后自动 cleanup）。
+- **降级路径**：后台 subagent 不可用/被权限拦时，回退 Codex 模式——原地 `sub-agy watch <id> --strict` 阻塞，超时续等。
+- commands 直接调 `sub-agy`（PATH），`SUB_AGY_HOME` + `uv run --project` 兜底（同 Codex 技能）。
+- Stop hook 兜底见 §18.3。脚本必须先快速判断 session cwd 下有无 `.subagy/jobs` 再做事（插件按用户级安装、对所有项目生效，不得打扰无关项目）。
+
+**注意事项**（写进 README Kimi 节）：安装/启停后需 `/reload` 或 `/new` 生效；本地安装会拷贝到 `$KIMI_CODE_HOME/plugins/managed/`，改源码需重装；命令带命名空间（`/subagy:dispatch`）。
+
+### 18.7 版本与交付
+
+- 三端插件 manifest `version` → `0.2.0`；`pyproject.toml` bump minor。
+- 交付物新增：`plugins-kimi/subagy/`、仓库根 `.kimi-plugin/plugin.json`、`plugins/subagy/hooks/hooks.json`、`plugins/subagy/scripts/stop-pending-check.sh`。

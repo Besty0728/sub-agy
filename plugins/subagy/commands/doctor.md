@@ -1,5 +1,5 @@
 ---
-description: 检查 sub-agy 运行环境
+description: 检查 sub-agy 运行环境。触发词：诊断、doctor、环境、检查、健康、agy未安装
 argument-hint: ""
 allowed-tools: Bash
 ---

@@ -1,14 +1,14 @@
 # sub-agy
 
-把 Antigravity CLI 变成 Claude Code / Codex 的异步代码执行后端。  
-Plan in Claude Code / Codex, execute with Antigravity CLI (Gemini) — official CLIs only.
+把 Antigravity CLI 变成 Claude Code / Codex / Kimi Code 的异步代码执行后端。  
+Plan in Claude Code / Codex / Kimi Code, execute with Antigravity CLI (Gemini) — official CLIs only.
 
 ## 特性
 
 - **异步派发后台执行**：`run` 立即返回 job_id，agy 在 detached supervisor 中继续完成。
 - **git worktree 隔离**：每个作业在独立 worktree 运行，互不污染主分支。
 - **结构化验收契约**：通过 `--json-schema` 要求 agy 返回 summary/files_changed/tests_passed 等字段。
-- **完成主动通知**：watcher 后台轮询，作业全部进入终态后自动唤醒主 agent。
+- **完成主动通知**：一 job 一后台 watcher，谁先完成先审谁；Stop hook 兜底提醒未收割作业（`sub-agy pending`）。
 - **自动打回回路**：验收不通过时 `feedback` 保留 conversation，启动下一轮修复。
 - **额度查询 0-token**：`quota` 免费查询 Antigravity 5h/weekly 双窗口剩余额度。
 
@@ -18,7 +18,7 @@ Plan in Claude Code / Codex, execute with Antigravity CLI (Gemini) — official 
 - **Python ≥3.11**
 - **uv**（推荐）或 pipx
 - **git**（worktree 隔离所需；非 git 项目自动降级为直跑）
-- **Claude Code 或 Codex 桌面端**（至少其一）
+- **Claude Code、Codex 桌面端或 Kimi Code CLI**（至少其一）
 
 ## 安装
 
@@ -44,11 +44,17 @@ sub-agy doctor
 
 ### Codex 桌面端
 
-```bash
-git clone https://github.com/Besty0728/sub-agy
+无需 clone，在 `~/.codex/config.toml` 添加 git 市场直连：
+
+```toml
+[marketplaces.subagy]
+source_type = "git"
+source = "https://github.com/Besty0728/sub-agy"
 ```
 
-在 `~/.codex/config.toml` 添加：
+重启 Codex，在插件界面安装 `subagy`。
+
+离线/开发场景可用本地市场作为备选：
 
 ```toml
 [marketplaces.subagy]
@@ -56,7 +62,14 @@ source_type = "local"
 source = "<clone 路径>"
 ```
 
-重启 Codex，在插件界面安装 `subagy`。
+### Kimi Code CLI
+
+```text
+/plugins install https://github.com/Besty0728/sub-agy
+/reload
+```
+
+安装后命令带命名空间：`/subagy:dispatch`、`/subagy:harvest` 等。派发后每个作业由一个后台 `subagy-watcher` subagent 盯守，完成即自动回到主 agent 收割。本地开发可 `/plugins install <clone 路径>`（会拷贝到 `$KIMI_CODE_HOME/plugins/managed/`，改源码需重装）。
 
 ## 快速上手
 
@@ -124,6 +137,7 @@ Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 9
 | `sub-agy watch <job-id>` | 原地等待作业进入终态 |
 | `sub-agy cancel <job-id>` | 取消作业 |
 | `sub-agy list` | 列出当前项目下的作业 |
+| `sub-agy pending` | 列出已完成但未收割的作业（Stop hook 兜底数据源） |
 | `sub-agy cleanup <job-id>` | 清理作业目录与分支 |
 | `sub-agy quota [--oneline] [--pretty]` | 查询 Antigravity 额度（0 token） |
 | `sub-agy doctor` | 环境诊断 |

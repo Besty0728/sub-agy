@@ -60,14 +60,22 @@ def test_supervise_error_exit(git_repo: Path, fake_agy: Path, monkeypatch: pytes
 def test_supervise_timeout_retry(
     git_repo: Path, fake_agy: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Test that retry budget is correctly distributed: wall_clock = timeout * max_attempts + grace.
+
+    With timeout=1s, max_retries=1 (max_attempts=2), grace=0:
+    wall_clock = 1*2 + 0 = 2s total.
+    Fake agy delays 1.5s, which exceeds single attempt timeout of 1s,
+    so it will timeout and retry. Second attempt also times out.
+    Final state should be error with attempts=2.
+    """
     config_path = git_repo / "test-config.toml"
     config_path.write_text(f'agy_bin = "{fake_agy}"\nmax_retries = 1\n', encoding="utf-8")
     monkeypatch.setenv("SUB_AGY_CONFIG", str(config_path))
 
-    job_id = "j-to"
+    job_id = "j-to-retry"
     jdir = job_dir(git_repo, job_id)
     jdir.mkdir(parents=True)
-    plan = parse_plan("slow")
+    plan = parse_plan("timeout test")
     prompt = assemble_prompt(plan, str(git_repo))
     (jdir / "prompt.txt").write_text(prompt, encoding="utf-8")
     (jdir / "schema.json").write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
@@ -91,14 +99,19 @@ def test_supervise_timeout_retry(
     }
     write_meta(git_repo, job_id, meta)
 
-    monkeypatch.setenv("FAKE_AGY_DELAY", "10")
+    # Fake agy sleeps 1.5s (exceeds 1s timeout) then exits with error
+    # wall_clock = 1s * 2 attempts + 0s grace = 2s total
+    # First attempt: timeout=min(1+0, 2)=1s, agy sleeps 1.5s -> timeout
+    # Second attempt: timeout=min(1+0, 1~)=1s, agy sleeps 1.5s -> timeout
+    # Both attempts exhaust budget -> state=error, attempts=2
+    monkeypatch.setenv("FAKE_AGY_DELAY", "1.5")
+    monkeypatch.setenv("FAKE_AGY_EXIT", "1")
     monkeypatch.setenv("_SUB_AGY_GRACE_SECONDS", "0")
     supervise_round(job_id, 1, git_repo)
 
     meta = read_meta(git_repo, job_id)
-    # Should have attempted twice (initial + 1 retry) and failed
-    assert meta["state"] == "error"
-    assert meta["attempts"] == 2
+    assert meta["state"] == "error", f"expected state=error, got {meta['state']}"
+    assert meta["attempts"] == 2, f"expected attempts=2, got {meta['attempts']}"
 
 
 def test_supervise_argv_unconditional_skip_permissions(

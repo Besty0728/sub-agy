@@ -1,0 +1,21 @@
+{
+  "name": "subagy",
+  "version": "0.2.0",
+  "description": "把 Antigravity CLI (agy) 变成 Kimi Code 的异步代码执行后端：派发计划、后台执行、结构化验收。",
+  "author": "betsy",
+  "license": "MIT",
+  "interface": {
+    "displayName": "sub-agy",
+    "shortDescription": "把 agy 变成 Kimi Code 的异步代码执行后端"
+  },
+  "skills": "./plugins-kimi/subagy/skills/",
+  "agents": "./plugins-kimi/subagy/agents/",
+  "commands": "./plugins-kimi/subagy/commands/",
+  "hooks": [
+    {
+      "event": "Stop",
+      "command": "bash ./plugins-kimi/subagy/hooks/stop-pending-check.sh",
+      "timeout": 10
+    }
+  ]
+}

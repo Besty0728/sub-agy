@@ -64,16 +64,23 @@ sub-agy run --plan "<plan.md>" --cwd "<project根>" [--model gemini-3.7-flash] [
 
 ## 阻塞等待（Codex 桌面端模式）
 
-Codex 没有 Claude Code 的 Bash `run_in_background` 主动唤醒机制，因此派发后**必须原地阻塞等待**作业进入终态：
+Codex 没有 Claude Code 的 Bash `run_in_background` 主动唤醒机制，因此派发后**必须原地阻塞等待**。但为了尽早收割完成的作业，使用**增量收割策略**：
+
+**按派发顺序逐 job 单独 watch**（而非把多个 id 塞进一个 `watch` 命令）：
 
 ```bash
-sub-agy watch <job-id> [job-id...] --cwd "<项目根>" --timeout <按任务规模, 默认 30m>
+sub-agy watch j-001 --strict --cwd "<项目根>" --timeout <该作业的等待上限>
+# j-001 终态后立即对它走 harvest 规则、feedback 或 merge
+# 然后 watch 下一个
+sub-agy watch j-002 --strict --cwd "<项目根>" --timeout <该作业的等待上限>
+# 依次...
 ```
 
-- `watch` 会轮询每个作业，直到**全部**进入终态（`done`/`error`/`cancelled`/`interrupted`）。
-- 超时 exit 124，但仍会打印当前状态；此时可重新执行 `sub-agy watch <job-id> --cwd <根>` **续等**（幂等）。
-- 全部终态后，`watch` 输出 JSON 数组，每个元素包含：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, tokens, diff_stat, result_path, events_path, worktree, branch`。
-- 退出码：全部作业进入终态 → 0；job 不存在 → 3；超时 → 124。
+- `watch --strict`：全部终态且仅含 `done` → exit 0；任一 `error`/`cancelled`/`interrupted` → exit 1。
+- 超时 exit 124，但仍会打印当前状态；此时可重新执行原命令 **续等**（幂等）。
+- 单个 job 终态后，`watch` 输出 JSON 数组（单元素）：`job_id, state, round, agy_status, summary, contract_ok, tests_passed, elapsed_seconds, tokens, diff_stat, result_path, events_path, worktree, branch`。
+- **超时建议值**：`该作业的 timeout × (queue_position 或 1) + 30m 余量`（考虑排队等候）。
+- 退出码：终态 → 0（strict 下仅 done）或 1（任一非 done 终态）；job 不存在 → 3；超时 → 124。
 
 ## watch 返回后的处理
 

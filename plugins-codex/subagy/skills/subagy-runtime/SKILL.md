@@ -17,12 +17,13 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Codex 通过技�
 | `run` | `--plan <file>` \| `--text <str>`（二选一必填）；`--cwd`；`--model/--effort/--timeout`；`--no-worktree`；`--no-schema`；`--wait` | 创建作业并 spawn detached supervisor。默认立即返回 `job_id`；`--wait` 会原地等待到终态并输出与 `watch` 相同的 JSON。 |
 | `status` | `<id>` \| `--all`；`--state`；`--pretty` | 查看作业状态、已运行时间、tokens 消耗、最近一步摘要。包含惰性 interrupted 和解。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。 |
 | `result` | `<id>`；`--events`；`--pretty` | 输出 `result.json`（含 `usage`）+ `git diff --stat`。作业未完成时 exit 4。 |
-| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--pretty` | 轮询直到全部作业进入终态。输出含 tokens 字段。超时 exit 124；全部终态 → 0。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。 |
+| `watch` | `<id> ...`；`--cwd`；`--interval`（默认 2，范围 0.5–60 秒）；`--timeout`（默认 60m）；`--strict`；`--pretty` | 轮询直到全部作业进入终态。输出含 tokens 字段。超时 exit 124；全部终态 → 0（strict 模式下任一 error/cancelled/interrupted → 1）。`--pretty` 表格包含 `elapsed` 与 `tokens` 列。 |
 | `feedback` | `<id> "<message>"` | 在保留 conversation 的前提下启动新一轮修复。要求状态为 done/error 且 conversation_id 存在。 |
 | `cancel` | `<id>` | 向 supervisor 发送 SIGTERM；supervisor 负责杀掉 agy 进程组并落 `cancelled` 状态。 |
 | `list` | `--state`；`--pretty` | 列出所有作业。 |
 | `cleanup` | `<id>`；`--purge`；`--delete-branch`；`--force` | 移除 worktree，可选删除分支与日志。默认拒绝清理 running/queued 作业。 |
 | `doctor` | `--pretty` | 检查 agy/PATH/git/Python/配置。 |
+| `pending` | `--cwd`；`--pretty` | 列出终态且未收割（`meta.harvested_at` 为空）的作业，JSON 数组，恒 exit 0。`result` 首次成功读取写收割标记，`feedback` 重置之。 |
 | `quota` | `--pretty` | 无头额度查询，0 token；失败 exit 1，agy 未安装 exit 127。 |
 | `_supervise` | `<id> --round N` | 内部隐藏命令，help 中不显示。 |
 
@@ -32,12 +33,12 @@ sub-agy 是 Antigravity CLI (`agy`) 的异步作业封装层。Codex 通过技�
 queued → running → done | error | cancelled | interrupted
 ```
 
-- `queued`：已创建，supervisor 尚未把 agy 拉起。
+- `queued`：已创建，supervisor 尚未把 agy 拉起。若 `queued_at` 距今超 60s 且 supervisor pid 不存在（僵尸），则被 `reconcile_state` 改写为 `interrupted`（防永久堵死）。
 - `running`：supervisor 正在运行 agy。
 - `done`：agy exit 0 且 status SUCCESS，已写 result.json。
 - `error`：agy 非零退出、status ERROR/INVALID，或无结果事件且无 transcript 兜底。
 - `cancelled`：用户主动 cancel。
-- `interrupted`：惰性和解状态。当 `state=running` 但 supervisor pid 已不存在且 `finished_at` 为空时，`status`/`list`/`watch` 会现场改写为 `interrupted`。
+- `interrupted`：惰性和解状态。当 `state=running` 但 supervisor pid 已不存在且 `finished_at` 为空时，`status`/`list`/`watch` 会现场改写为 `interrupted`。同时也处理 `state=queued` 且距创建 60s+ 仍无 supervisor pid 的僵尸作业。
 
 ## result.json 字段解释
 
@@ -104,9 +105,18 @@ queued → running → done | error | cancelled | interrupted
 ## agy 侧已知坑
 
 - **stdout bug 兜底**：非 TTY 下 `agy -p` 偶发"模型已响应但 stdout 为空"。sub-agy 内置兜底：读 `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl`，取最后一条 assistant 文本。触发时 `result.recovered_from_transcript=true`。
-- **禁止 `--continue`**：agl-bridge 使用 `--conversation <id>` 续会话，因为全局最近会话有并发竞争。
+- **禁止 `--continue`**：sub-agy 使用 `--conversation <id>` 续会话，因为全局最近会话有并发竞争。
 - **权限策略**：sub-agy 恒以 `--dangerously-skip-permissions` 启动 agy 实现无人值守；安全边界由 git worktree 隔离 + 人工合并保障。
 - **round≥2 schema 降级**：若带 `--json-schema` 的调用在 round≥2 以参数错误失败，sub-agy 会去掉 schema 重试一次，并在 result 标 `contract_ok=false, contract_note="schema dropped on round>=2"`。
+
+## 并发与排队
+
+- `max_concurrent` 参数（默认 3）限制**同时 `running`** 的作业数；超出 max_concurrent 的作业自动进入 FIFO 等待队列。
+- `queued_at` 字段记录进入队列的时间；作业按该时间戳顺序获取运行槽位。
+- `queue_position` 在 `run` 与 `status` 输出中显示该作业在等待队列中的位次（1 起），`null` 表示已获得槽位或已终态。
+- `queue_timeout` 参数（默认 2h）为最长排队等待时间；超时作业落 `error` 状态。
+- `feedback` 打回时，`queued_at` 被重置，作业回到队列末尾重新排队。
+- `run` 不因并发限制而失败（exit 5 保留但不再产出）；所有派发都会成功创建作业，是否立即运行由槽位决定。
 
 ## 反馈轮次语义
 
