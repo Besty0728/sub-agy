@@ -1,6 +1,6 @@
 # sub-agy
 
-> 在 **Claude Code / Codex / Kimi Code** 里规划,交给 **Antigravity CLI**(Gemini)执行 —— 全程只用官方 CLI。
+> 在 **Claude Code / Codex / Kimi Code** 中将 **Antigravity** 作为 subagent 使用。
 
 [English](./README.md) | **简体中文**
 

@@ -1,6 +1,6 @@
 # sub-agy
 
-> Plan in **Claude Code / Codex / Kimi Code** — execute on **Antigravity CLI** (Gemini). Official CLIs only.
+> Use **Antigravity** as a subagent in **Claude Code / Codex / Kimi Code**.
 
 **English** | [简体中文](./README-CN.md)
 
