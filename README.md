@@ -190,5 +190,3 @@ Gemini 模型：5h 限额剩余 99.8%（32分钟后重置），7d 限额剩余 9
 ## License
 
 [MIT](./LICENSE)
-
-Design document: [SPEC.md](./SPEC.md).

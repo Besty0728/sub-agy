@@ -10,5 +10,8 @@ dist/
 # sub-agy 运行时数据（作业日志、worktree、inbox 计划）
 .subagy/
 
+# 本地 release note 草稿（/release 生成）
+.releases/
+
 # OS
 .DS_Store
